@@ -1,0 +1,102 @@
+menu "OP Barcode Station Config"
+
+    menu "WiFi Configuration"
+    config WIFI_SSID
+        string "WiFi SSID"
+        default ""
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+    endmenu
+
+    menu "MQTT Configuration"
+        config MQTT_BROKER_URI
+            string "MQTT broker URI"
+            default "mqtts://192.168.1.19:8883"
+            help
+            URI of the MQTT broker (scheme://host:port). Use mqtts:// for SSL.
+
+        config MQTT_REQ_TOPIC_PREFIX
+            string "Request Topic Prefix"
+            default "product"
+            help
+            This prefix is preppended to device MAC and requested BARCODE
+
+        config MQTT_TOPIC_STATUS
+            string "Status Control Topic"
+            default "station/status"
+
+        config MQTT_TOPIC_FIRMWARE
+            string "Firmware Control Topic"
+            default "station/firmware_update"
+    endmenu
+
+    menu "Power conf"
+        config DEEP_SLEEP_DURATION
+            int "Deep Sleep Duration (seconds)"
+            default 300
+            range 1 86400
+    endmenu
+
+    menu "Barcode Scanner (UART)"
+        config BARCODE_TX_PIN
+            int "TX Pin"
+            default 15
+            help
+            GPIO connected to Scanner's RX.
+
+        config BARCODE_RX_PIN
+            int "RX Pin"
+            default 13
+            help
+            GPIO connected to Scanner's TX.
+
+        config BARCODE_BAUD_RATE
+            int "Baud Rate"
+            default 9600
+
+        config BARCODE_DELIMITER
+            int "Delimiter (ASCII)"
+            default 13
+            help
+            ASCII value of the delimiter character. 13 is '\r' (Carriage Return).
+
+        config MAX_BARCODE_BUFFER_SIZE
+        int "Max Barcode Length"
+        default 30
+    endmenu
+
+    menu "Display (SPI/ILI9341)"
+        config TFT_MISO
+            int "MISO Pin"
+            default 19
+
+        config TFT_MOSI
+            int "MOSI Pin"
+            default 23
+
+        config TFT_SCLK
+            int "SCLK Pin"
+            default 18
+
+        config TFT_CS
+            int "CS Pin"
+            default 32
+
+        config TFT_DC
+            int "DC Pin"
+            default 26
+
+        config TFT_RST
+            int "RST Pin"
+            default 25
+
+        config LED_PIN
+        int "LED Pin"
+        default 27
+        help
+        When LED pin on the display is perma VCC connected, set to -1.
+        Otherwise, setting the pin allows dimming.
+    endmenu
+endmenu
