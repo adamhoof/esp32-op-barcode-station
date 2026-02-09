@@ -119,8 +119,11 @@ extern "C" [[noreturn]] void app_main(void)
                     xEventGroupSetBits(eventGroup, BIT_REQ_OTA);
                     xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, portMAX_DELAY);
 
+                    // free ram so that another tls handshake can happen safely, smol
                     delete_task_safe(h_display);
                     delete_task_safe(h_barcode);
+                    mqtt_service_stop();
+                    vTaskDelay(pdMS_TO_TICKS(500));
 
                     strlcpy(ota_params.url, msg.payload, sizeof(ota_params.url));
 
