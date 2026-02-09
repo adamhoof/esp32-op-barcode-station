@@ -127,7 +127,7 @@ extern "C" [[noreturn]] void app_main(void)
 
                     strlcpy(ota_params.url, msg.payload, sizeof(ota_params.url));
 
-                    xTaskCreate(ota_task, "ota", 8192, &ota_params, 6, nullptr);
+                    xTaskCreate(ota_task, "ota", 8192, &ota_params, 3, nullptr);
                     break;
 
                 case ControlType::SCANNER_CONF:
