@@ -4,11 +4,14 @@
 #include <freertos/event_groups.h>
 #include <esp_event.h>
 
+// main -> tasks
 constexpr EventBits_t BIT_REQ_SLEEP = (1 << 0);
 constexpr EventBits_t BIT_REQ_OTA = (1 << 1);
 constexpr EventBits_t BIT_ACK_BARCODE = (1 << 2);
-constexpr EventBits_t BIT_ACK_DISPLAY = (1 << 3);
 
+// tasks -> main
+constexpr EventBits_t BIT_ACK_DISPLAY = (1 << 3);
+constexpr EventBits_t BIT_ACK_BARCODE = (1 << 4);
 
 ESP_EVENT_DECLARE_BASE(APP_EVENT);
 
@@ -23,7 +26,8 @@ struct ScanEvent {
 enum class ControlType {
     WAKE,
     SLEEP,
-    FIRMWARE_START,
+    FIRMWARE,
+    SCANNER_CONF
 };
 
 struct ControlMessage {

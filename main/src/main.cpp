@@ -97,7 +97,7 @@ extern "C" [[noreturn]] void app_main(void)
                     enter_deep_sleep(10);
                     break;
 
-                case ControlType::FIRMWARE_START:
+                case ControlType::FIRMWARE:
                     xEventGroupClearBits(eventGroup, task_bits);
                     xEventGroupSetBits(eventGroup, BIT_REQ_OTA);
                     xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, portMAX_DELAY);

@@ -98,10 +98,9 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
             queue_mqtt_status(true);
 
             esp_mqtt_client_subscribe_single(event->client, s_ctx.topic_base, 1);
-            esp_mqtt_client_subscribe_single(event->client, CONFIG_MQTT_TOPIC_STATUS, 1);
-            esp_mqtt_client_subscribe_single(event->client, CONFIG_MQTT_TOPIC_FIRMWARE, 1);
+            esp_mqtt_client_subscribe_single(event->client, CONFIG_MQTT_TOPIC_CONTROL, 1);
 
-            ESP_LOGI(TAG, "Subscribed to topics: '%s', '%s', '%s'", s_ctx.topic_base, CONFIG_MQTT_TOPIC_STATUS, CONFIG_MQTT_TOPIC_FIRMWARE);
+            ESP_LOGI(TAG, "Subscribed to topics: '%s', '%s'", s_ctx.topic_base, CONFIG_MQTT_TOPIC_CONTROL);
             break;
 
         case MQTT_EVENT_DISCONNECTED:
@@ -110,32 +109,25 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
             break;
 
         case MQTT_EVENT_DATA:
-            ESP_LOGI(TAG, "Msg received on topic: '%.*s'", event->topic_len, event->topic);
-
             if (event->topic_len == static_cast<int>(strlen(s_ctx.topic_base)) &&
                 memcmp(event->topic, s_ctx.topic_base, event->topic_len) == 0) {
-
                 handle_product_json(event->data, event->data_len);
-            }
-
-            else if (event->topic_len == static_cast<int>(strlen(CONFIG_MQTT_TOPIC_STATUS)) &&
-                     memcmp(event->topic, CONFIG_MQTT_TOPIC_STATUS, event->topic_len) == 0) {
+                }
+            else if (event->topic_len == static_cast<int>(strlen(CONFIG_MQTT_TOPIC_CONTROL)) &&
+                     memcmp(event->topic, CONFIG_MQTT_TOPIC_CONTROL, event->topic_len) == 0) {
 
                 if (event->data_len == 4 && memcmp(event->data, "wake", 4) == 0) {
-                    ESP_LOGI(TAG, "Command recognized: WAKE");
                     publish_control(ControlType::WAKE);
                 }
                 else if (event->data_len == 5 && memcmp(event->data, "sleep", 5) == 0) {
-                    ESP_LOGI(TAG, "Command recognized: SLEEP");
                     publish_control(ControlType::SLEEP);
                 }
-            }
-
-            else if (event->topic_len == static_cast<int>(strlen(CONFIG_MQTT_TOPIC_FIRMWARE)) &&
-                     memcmp(event->topic, CONFIG_MQTT_TOPIC_FIRMWARE, event->topic_len) == 0) {
-
-                ESP_LOGI(TAG, "Firmware Update Requested");
-                publish_control(ControlType::FIRMWARE_START, event->data, event->data_len);
+                else if (event->data_len == 12 && memcmp(event->data, "conf_scanner", 12) == 0) {
+                    publish_control(ControlType::SCANNER_CONF);
+                }
+                else if (event->data_len > 8 && memcmp(event->data, "https://", 8) == 0) {
+                    publish_control(ControlType::FIRMWARE, event->data, event->data_len);
+                }
             }
             break;
 
@@ -210,4 +202,12 @@ void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
     ESP_ERROR_CHECK(esp_event_handler_instance_register(APP_EVENT, APP_EVENT_BARCODE_SCANNED, &on_barcode_scanned, nullptr, nullptr));
 
     ESP_ERROR_CHECK(esp_mqtt_client_start(s_ctx.client));
+}
+
+void mqtt_service_stop() {
+    if (s_ctx.client != nullptr) {
+        esp_mqtt_client_stop(s_ctx.client);
+        esp_mqtt_client_destroy(s_ctx.client);
+        s_ctx.client = nullptr;
+    }
 }

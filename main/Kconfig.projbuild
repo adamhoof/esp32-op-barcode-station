@@ -23,13 +23,10 @@ menu "OP Barcode Station Config"
             help
             This prefix is preppended to device MAC and requested BARCODE
 
-        config MQTT_TOPIC_STATUS
+        config MQTT_TOPIC_CONTROL
             string "Status Control Topic"
-            default "station/status"
+            default "station/control"
 
-        config MQTT_TOPIC_FIRMWARE
-            string "Firmware Control Topic"
-            default "station/firmware_update"
     endmenu
 
     menu "Power conf"
