@@ -7,7 +7,7 @@
 // main -> tasks
 constexpr EventBits_t BIT_REQ_SLEEP = (1 << 0);
 constexpr EventBits_t BIT_REQ_OTA = (1 << 1);
-constexpr EventBits_t BIT_ACK_BARCODE = (1 << 2);
+constexpr EventBits_t BIT_REQ_BARCODE_SCANNER_CONF = (1 << 2);
 
 // tasks -> main
 constexpr EventBits_t BIT_ACK_DISPLAY = (1 << 3);

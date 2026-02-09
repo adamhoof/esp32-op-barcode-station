@@ -109,6 +109,18 @@ extern "C" [[noreturn]] void app_main(void)
 
                     xTaskCreate(ota_task, "ota", 8192, &ota_params, 6, nullptr);
                     break;
+
+                case ControlType::SCANNER_CONF:
+                    if (h_barcode == nullptr)  {
+                        ESP_LOGE(TAG, "No Barcode Task Running!");
+                        break;
+                    }
+                    ESP_LOGI(TAG, "Initiating Scanner Configuration...");
+                    xEventGroupClearBits(eventGroup, BIT_ACK_BARCODE);
+                    xEventGroupSetBits(eventGroup, BIT_REQ_BARCODE_SCANNER_CONF);
+                    xEventGroupWaitBits(eventGroup, BIT_ACK_BARCODE, pdFALSE, pdTRUE, portMAX_DELAY);
+                    ESP_LOGI(TAG, "Scanner Configuration & Save Completed.");
+                    break;
             }
         }
     }

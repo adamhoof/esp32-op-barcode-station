@@ -9,12 +9,21 @@
 
 static const char *TAG = "BARCODE";
 
+static const uint8_t CMD_SCANNER_SLEEP[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0xD9, 0xA5, 0xAB, 0xCD};
+static const uint8_t CMD_SCANNER_SENSITIVITY[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0x0F, 0x60, 0xAB, 0xCD};
+static const uint8_t CMD_SCANNER_SAVE[] = {0x7E, 0x00, 0x09, 0x01, 0x00, 0x00, 0x00, 0xAB, 0xCD};
+
 static bool is_numeric(const char *s) {
     if (s == nullptr || *s == '\0') return false;
     for (size_t i = 0; s[i] != '\0'; ++i) {
         if (!isdigit(static_cast<unsigned char>(s[i]))) return false;
     }
     return true;
+}
+
+static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size_t len) {
+    uart_write_bytes(uart_port, (const char*)cmd, len);
+    vTaskDelay(pdMS_TO_TICKS(100));
 }
 
 [[noreturn]] void barcode_task(void *pvParameters) {
@@ -60,16 +69,14 @@ static bool is_numeric(const char *s) {
     for (;;) {
         const EventBits_t req_bits = xEventGroupWaitBits(
             params->eventGroup,
-            BIT_REQ_SLEEP | BIT_REQ_OTA,
+            BIT_REQ_SLEEP | BIT_REQ_OTA | BIT_REQ_BARCODE_SCANNER_CONF,
             pdFALSE,
             pdFALSE,
             0
         );
 
         if ((req_bits & BIT_REQ_SLEEP) != 0) {
-            static const uint8_t sleep_cmd[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0xD9, 0xA5, 0xAB, 0xCD};
-            uart_write_bytes(UART_NUM_1, sleep_cmd, sizeof(sleep_cmd));
-            uart_wait_tx_done(UART_NUM_1, pdMS_TO_TICKS(100));
+            send_uart_cmd(UART_NUM_1, CMD_SCANNER_SLEEP, sizeof(CMD_SCANNER_SLEEP));
             xEventGroupSetBits(params->eventGroup, BIT_ACK_BARCODE);
             vTaskSuspend(nullptr);
         }
@@ -78,6 +85,24 @@ static bool is_numeric(const char *s) {
             uart_driver_delete(UART_NUM_1);
             xEventGroupSetBits(params->eventGroup, BIT_ACK_BARCODE);
             vTaskSuspend(nullptr);
+        }
+
+        if ((req_bits & BIT_REQ_BARCODE_SCANNER_CONF) != 0) {
+            ESP_LOGW(TAG, "STARTING SCANNER CONFIGURATION...");
+
+            send_uart_cmd(UART_NUM_1, CMD_SCANNER_SENSITIVITY, sizeof(CMD_SCANNER_SENSITIVITY));
+            send_uart_cmd(UART_NUM_1, CMD_SCANNER_SAVE, sizeof(CMD_SCANNER_SAVE));
+
+            ESP_LOGW(TAG, "SCANNER CONFIG COMPLETE. Reading response buffer...");
+
+            uint8_t dump[256];
+            int len = uart_read_bytes(UART_NUM_1, dump, sizeof(dump), pdMS_TO_TICKS(200));
+            if (len > 0) {
+                ESP_LOG_BUFFER_HEX(TAG, dump, len);
+            }
+
+            xEventGroupClearBits(params->eventGroup, BIT_REQ_BARCODE_SCANNER_CONF);
+            xEventGroupSetBits(params->eventGroup, BIT_ACK_BARCODE);
         }
 
         const int n = uart_read_bytes(UART_NUM_1, rx, sizeof(rx), pdMS_TO_TICKS(50));
