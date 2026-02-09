@@ -7,6 +7,7 @@
 #include "nvs_flash.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_sntp.h"
 #include "freertos/event_groups.h"
 #include "services/wifi_service.h"
 #include "services/mqtt_service.h"
@@ -46,6 +47,17 @@ static void delete_task_safe(TaskHandle_t& handle_ref)
     }
 }
 
+void time_sync_cb(struct timeval *tv)
+{
+    time_t now;
+    struct tm timeinfo{};
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    char strftime_buf[64];
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    ESP_LOGI(TAG, "Time sync event hit, current time: %s", strftime_buf);
+}
+
 extern "C" [[noreturn]] void app_main(void)
 {
     init_system();
@@ -56,6 +68,11 @@ extern "C" [[noreturn]] void app_main(void)
 
     wifi_service_init(printQueue);
     mqtt_service_init(printQueue, controlQueue);
+
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    sntp_set_time_sync_notification_cb(time_sync_cb);
+    esp_sntp_init();
 
     static DisplayTaskParams display_params { .printQueue = printQueue, .eventGroup = eventGroup };
     static BarcodeTaskParams barcode_params { .printQueue = printQueue, .eventGroup = eventGroup };
