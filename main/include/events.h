@@ -27,7 +27,8 @@ enum class ControlType {
     WAKE,
     SLEEP,
     FIRMWARE,
-    SCANNER_CONF
+    SCANNER_CONF,
+    MQTT_UNREACHABLE
 };
 
 struct ControlMessage {

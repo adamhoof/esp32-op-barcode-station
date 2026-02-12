@@ -1,6 +1,7 @@
 #include "services/mqtt_service.h"
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
 #include <atomic>
 #include "sdkconfig.h"
 #include "esp_log.h"
@@ -32,9 +33,27 @@ static struct {
     QueueHandle_t print_queue{};
     QueueHandle_t control_queue{};
     std::atomic<bool> publish_update;
+    std::atomic<bool> unreachable_notified;
     char topic_base[TOPIC_BASE_LEN]{};
     char client_id[13]{};
 } s_ctx;
+
+static bool is_broker_unreachable(const esp_mqtt_event_t* event) {
+    if (event == nullptr || event->error_handle == nullptr) return false;
+    if (event->error_handle->error_type != MQTT_ERROR_TYPE_TCP_TRANSPORT) return false;
+
+    switch (const int sock_errno = event->error_handle->esp_transport_sock_errno) {
+        case ENETUNREACH:
+        case EHOSTUNREACH:
+        case ETIMEDOUT:
+        case ECONNREFUSED:
+        case ENETDOWN:
+        case EHOSTDOWN:
+            return true;
+        default:
+            return false;
+    }
+}
 
 static void queue_mqtt_status(bool connected) {
     if (!s_ctx.publish_update) return;
@@ -95,6 +114,7 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
     switch (event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+            s_ctx.unreachable_notified = false;
             queue_mqtt_status(true);
 
             esp_mqtt_client_subscribe_single(event->client, s_ctx.topic_base, 1);
@@ -132,10 +152,16 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
             break;
 
         case MQTT_EVENT_ERROR:
-            if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+            if (event->error_handle != nullptr &&
+                event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
                  ESP_LOGE(TAG, "TLS/TCP Error: 0x%x, Sock Errno: %d",
                           event->error_handle->esp_tls_last_esp_err,
                           event->error_handle->esp_transport_sock_errno);
+            }
+
+            if (is_broker_unreachable(event) && !s_ctx.unreachable_notified.exchange(true)) {
+                ESP_LOGW(TAG, "Broker unreachable, publishing UNREACHABLE control event");
+                publish_control(ControlType::MQTT_UNREACHABLE);
             }
             break;
         default: break;
@@ -167,6 +193,7 @@ void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
     s_ctx.print_queue = printQueue;
     s_ctx.control_queue = controlQueue;
     s_ctx.publish_update = true;
+    s_ctx.unreachable_notified = false;
 
     uint8_t mac[6]{};
     ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA));
