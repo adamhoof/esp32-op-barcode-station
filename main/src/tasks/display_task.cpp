@@ -25,6 +25,8 @@
 #define LEDC_FREQUENCY          5000
 #define LEDC_DUTY_ON            200
 
+#define LEDC_FADE_DELAY_MS      10
+
 struct UiContext {
     lv_obj_t *root;
     lv_obj_t *cont_status;
@@ -65,6 +67,40 @@ static void init_backlight_pwm() {
 static void set_backlight_brightness(uint32_t duty) {
     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+}
+
+static void display_backlight_fade_on(const uint32_t max_brightness, const uint32_t fade_step = 20)
+{
+    uint32_t duty = 0;
+    while (true) {
+        set_backlight_brightness(duty);
+        vTaskDelay(pdMS_TO_TICKS(LEDC_FADE_DELAY_MS));
+
+        if (duty == max_brightness) {
+            break;
+        }
+
+        duty = (duty + fade_step >= max_brightness) ? max_brightness : (duty + fade_step);
+    }
+
+    set_backlight_brightness(max_brightness);
+}
+
+static void display_backlight_fade_off(const uint32_t fade_step = 20)
+{
+    uint32_t duty = LEDC_DUTY_ON;
+    while (true) {
+        set_backlight_brightness(duty);
+        vTaskDelay(pdMS_TO_TICKS(LEDC_FADE_DELAY_MS));
+
+        if (duty == 0) {
+            break;
+        }
+
+        duty = (duty <= fade_step) ? 0 : (duty - fade_step);
+    }
+
+    set_backlight_brightness(0);
 }
 
 static void ui_set_text(lv_obj_t *label, const char *text, uint32_t color_hex, const lv_font_t *font)
@@ -245,7 +281,7 @@ static void init_display_resources(esp_lcd_panel_io_handle_t* out_io, esp_lcd_pa
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(panel, 0, 0));
 
     init_backlight_pwm();
-    set_backlight_brightness(LEDC_DUTY_ON);
+    display_backlight_fade_on(LEDC_DUTY_ON);
 
     const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
@@ -306,11 +342,7 @@ static void deinit_display_resources(esp_lcd_panel_io_handle_t io, esp_lcd_panel
         if ((req_bits & BIT_REQ_SLEEP) != 0) {
             lvgl_port_lock(0);
 
-            for (int i = LEDC_DUTY_ON; i >= 0; i -= 20) {
-                set_backlight_brightness(i);
-                vTaskDelay(pdMS_TO_TICKS(10));
-            }
-            set_backlight_brightness(0);
+            display_backlight_fade_off();
 
             ledc_stop(LEDC_MODE, LEDC_CHANNEL_0, 0);
             gpio_set_direction((gpio_num_t)CONFIG_LED_PIN, GPIO_MODE_OUTPUT);
