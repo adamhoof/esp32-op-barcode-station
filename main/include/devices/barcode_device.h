@@ -16,6 +16,7 @@ public:
 
     esp_err_t wake();
     esp_err_t sleep();
+    esp_err_t prepare_for_deep_sleep();
     esp_err_t configure();
 
     int read_bytes(uint8_t* dst, size_t len, TickType_t timeout_ticks) const;

@@ -81,6 +81,9 @@ void BarcodeDevice::send_cmd(const uint8_t* cmd, const size_t len) const
 
 esp_err_t BarcodeDevice::wake()
 {
+    gpio_hold_dis(static_cast<gpio_num_t>(CONFIG_BARCODE_TX_PIN));
+    gpio_hold_dis(static_cast<gpio_num_t>(CONFIG_BARCODE_RX_PIN));
+
     const esp_err_t err = ensure_initialized();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "wake: init failed: %s", esp_err_to_name(err));
@@ -101,6 +104,32 @@ esp_err_t BarcodeDevice::sleep()
     }
 
     send_cmd(CMD_SCANNER_SLEEP, sizeof(CMD_SCANNER_SLEEP));
+    const int tx_done = uart_wait_tx_done(port_, pdMS_TO_TICKS(200));
+    if (tx_done != ESP_OK) {
+        ESP_LOGW(TAG, "sleep: uart_wait_tx_done timed out");
+    }
+    return ESP_OK;
+}
+
+esp_err_t BarcodeDevice::prepare_for_deep_sleep()
+{
+    const esp_err_t err = ensure_initialized();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "prepare_for_deep_sleep: init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    const gpio_num_t tx_pin = static_cast<gpio_num_t>(CONFIG_BARCODE_TX_PIN);
+    const gpio_num_t rx_pin = static_cast<gpio_num_t>(CONFIG_BARCODE_RX_PIN);
+
+    gpio_set_direction(tx_pin, GPIO_MODE_OUTPUT);
+    gpio_set_level(tx_pin, 1);
+    gpio_hold_en(tx_pin);
+
+    gpio_set_direction(rx_pin, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(rx_pin, GPIO_PULLUP_ONLY);
+    gpio_hold_en(rx_pin);
+
     return ESP_OK;
 }
 

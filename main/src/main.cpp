@@ -104,6 +104,11 @@ static void enforce_devices_sleep(DisplayDevice& display_device, BarcodeDevice& 
     if (barcode_err != ESP_OK) {
         ESP_LOGW(TAG, "Barcode sleep failed: %s", esp_err_to_name(barcode_err));
     }
+
+    const esp_err_t barcode_prepare_err = barcode_device.prepare_for_deep_sleep();
+    if (barcode_prepare_err != ESP_OK) {
+        ESP_LOGW(TAG, "Barcode deep sleep preparation failed: %s", esp_err_to_name(barcode_prepare_err));
+    }
 }
 
 void time_sync_cb(struct timeval *tv)
