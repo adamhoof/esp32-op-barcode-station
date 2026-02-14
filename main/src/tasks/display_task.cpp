@@ -319,7 +319,7 @@ static void deinit_display_resources(esp_lcd_panel_io_handle_t io, esp_lcd_panel
 
 [[noreturn]] void display_task(void *pvParameters)
 {
-    ESP_LOGI(TAG, "Display task started");
+    ESP_LOGD(TAG, "Display task started");
 
     const auto *params = static_cast<const DisplayTaskParams *>(pvParameters);
 

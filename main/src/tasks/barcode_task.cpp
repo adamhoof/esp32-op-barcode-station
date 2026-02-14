@@ -27,7 +27,7 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
 }
 
 [[noreturn]] void barcode_task(void *pvParameters) {
-    ESP_LOGI(TAG, "Barcode task started");
+    ESP_LOGD(TAG, "Barcode task started");
 
     const auto *params = static_cast<const BarcodeTaskParams *>(pvParameters);
 
@@ -149,7 +149,7 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
             }
 
             buffer[buffer_occupancy] = '\0';
-            ESP_LOGI(TAG, "Scanned: %s", buffer);
+            ESP_LOGD(TAG, "Scanned: %s", buffer);
 
             if (is_numeric(buffer)) {
                 ScanEvent evt{};

@@ -133,13 +133,13 @@ extern "C" [[noreturn]] void app_main(void)
             continue;
         }
 
-        ESP_LOGI(TAG, "Received Control Type: %s", control_type_to_string(msg.type));
+        ESP_LOGD(TAG, "Received Control Type: %s", control_type_to_string(msg.type));
 
         EventBits_t task_bits = 0;
         if (h_display != nullptr) task_bits |= BIT_ACK_DISPLAY;
         if (h_barcode != nullptr) task_bits |= BIT_ACK_BARCODE;
 
-        ESP_LOGI(TAG, "Active Tasks: %s", active_tasks_to_string(task_bits));
+        ESP_LOGD(TAG, "Active Tasks: %s", active_tasks_to_string(task_bits));
 
         switch (msg.type) {
                 case ControlType::WAKE: {
@@ -191,7 +191,7 @@ extern "C" [[noreturn]] void app_main(void)
                         : ControlType::WAKE;
                     fallback_msg.payload[0] = '\0';
 
-                    ESP_LOGI(TAG, "Unreachable fallback: %s",
+                    ESP_LOGD(TAG, "Unreachable fallback: %s",
                              (fallback_msg.type == ControlType::SLEEP) ? "SLEEP" : "WAKE");
 
                     if (xQueueSend(controlQueue, &fallback_msg, 0) != pdTRUE) {

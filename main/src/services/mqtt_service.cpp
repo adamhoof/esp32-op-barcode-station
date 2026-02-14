@@ -101,14 +101,14 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
 
     switch (event_id) {
         case MQTT_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+            ESP_LOGD(TAG, "MQTT_EVENT_CONNECTED");
             s_ctx.unreachable_notified = false;
             queue_mqtt_status(true);
 
             esp_mqtt_client_subscribe_single(event->client, s_ctx.topic_base, 1);
             esp_mqtt_client_subscribe_single(event->client, CONFIG_MQTT_TOPIC_CONTROL, 1);
 
-            ESP_LOGI(TAG, "Subscribed to topics: '%s', '%s'", s_ctx.topic_base, CONFIG_MQTT_TOPIC_CONTROL);
+            ESP_LOGD(TAG, "Subscribed to topics: '%s', '%s'", s_ctx.topic_base, CONFIG_MQTT_TOPIC_CONTROL);
             break;
 
         case MQTT_EVENT_DISCONNECTED:
@@ -161,7 +161,7 @@ static void on_barcode_scanned(void* handler_args, esp_event_base_t base, int32_
 
     const auto* ev = static_cast<const ScanEvent*>(event_data);
 
-    ESP_LOGI(TAG, "Processing Barcode: %s", ev->barcode);
+    ESP_LOGD(TAG, "Processing Barcode: %s", ev->barcode);
 
     static char full_topic[TOPIC_BUFFER_SIZE];
 
@@ -170,7 +170,7 @@ static void on_barcode_scanned(void* handler_args, esp_event_base_t base, int32_
     if (written > 0 && written < static_cast<int>(TOPIC_BUFFER_SIZE)) {
         int msg_id = esp_mqtt_client_publish(s_ctx.client, full_topic, "", 0, 1, 0);
         if (msg_id != -1) {
-            ESP_LOGI(TAG, "Published to '%s' (Msg ID: %d)", full_topic, msg_id);
+            ESP_LOGD(TAG, "Published to '%s' (Msg ID: %d)", full_topic, msg_id);
         } else {
             ESP_LOGE(TAG, "Publish failed");
         }
@@ -179,7 +179,7 @@ static void on_barcode_scanned(void* handler_args, esp_event_base_t base, int32_
 
 void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
     if (s_ctx.client != nullptr) {
-        ESP_LOGI(TAG, "MQTT service already initialized, skipping init");
+        ESP_LOGD(TAG, "MQTT service already initialized, skipping init");
         return;
     }
 
@@ -197,8 +197,8 @@ void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
     snprintf(s_ctx.topic_base, sizeof(s_ctx.topic_base), "%s/%s",
              CONFIG_MQTT_REQ_TOPIC_PREFIX, s_ctx.client_id);
 
-    ESP_LOGI(TAG, "Device Topic Base: %s", s_ctx.topic_base);
-    ESP_LOGI(TAG, "MQTT Client ID: %s", s_ctx.client_id);
+    ESP_LOGD(TAG, "Device Topic Base: %s", s_ctx.topic_base);
+    ESP_LOGD(TAG, "MQTT Client ID: %s", s_ctx.client_id);
 
     esp_mqtt_client_config_t cfg{};
     cfg.broker.address.uri = CONFIG_MQTT_BROKER_URI;
