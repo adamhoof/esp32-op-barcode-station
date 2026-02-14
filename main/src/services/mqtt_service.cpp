@@ -178,6 +178,8 @@ static void on_barcode_scanned(void* handler_args, esp_event_base_t base, int32_
 }
 
 void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+
     if (s_ctx.client != nullptr) {
         ESP_LOGD(TAG, "MQTT service already initialized, skipping init");
         return;

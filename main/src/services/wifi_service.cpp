@@ -82,6 +82,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
 void wifi_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue)
 {
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+
     s_ctx.print_queue = printQueue;
     s_ctx.control_queue = controlQueue;
     s_ctx.publish_update = true;

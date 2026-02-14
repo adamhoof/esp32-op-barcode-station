@@ -27,6 +27,8 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
 }
 
 [[noreturn]] void barcode_task(void *pvParameters) {
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+
     ESP_LOGD(TAG, "Barcode task started");
 
     const auto *params = static_cast<const BarcodeTaskParams *>(pvParameters);
@@ -65,8 +67,6 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
     char buffer[CONFIG_MAX_BARCODE_BUFFER_SIZE + 1];
     size_t buffer_occupancy = 0;
     bool overflow = false;
-
-    ESP_LOGD(TAG, "Barcode Task Started on UART1 (TX:%d, RX:%d)", CONFIG_BARCODE_TX_PIN, CONFIG_BARCODE_RX_PIN);
 
     for (;;) {
         const EventBits_t req_bits = xEventGroupWaitBits(

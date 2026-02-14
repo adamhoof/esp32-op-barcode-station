@@ -18,6 +18,8 @@ static const char *TAG = "ota_task";
 
 [[noreturn]] void ota_task(void *pvParameters)
 {
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+
     auto *params = static_cast<OtaTaskParams *>(pvParameters);
 
     esp_http_client_config_t http_config{};
