@@ -9,10 +9,18 @@
 #include "esp_sntp.h"
 
 #include "print_message.h"
+#include "events.h"
+
+static const char *TAG = "wifi_service";
+
+constexpr int WIFI_MAX_FAILURES = 3;
 
 static struct {
     QueueHandle_t print_queue{};
+    QueueHandle_t control_queue{};
     std::atomic<bool> publish_update;
+    int disconnect_count{0};
+    bool unreachable_notified{false};
 } s_ctx;
 
 static void send_wifi_status(bool connected, uint8_t last_octet = 0)
@@ -33,6 +41,14 @@ static void send_wifi_status(bool connected, uint8_t last_octet = 0)
     }
 }
 
+static void publish_control(ControlType type) {
+    if (s_ctx.control_queue == nullptr) return;
+    ControlMessage msg{};
+    msg.type = type;
+    msg.payload[0] = '\0';
+    xQueueSend(s_ctx.control_queue, &msg, 0);
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT) {
@@ -42,6 +58,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
         else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
             send_wifi_status(false);
+
+            s_ctx.disconnect_count++;
+            if (s_ctx.disconnect_count >= WIFI_MAX_FAILURES && !s_ctx.unreachable_notified) {
+                ESP_LOGW(TAG, "WiFi failed %d times, publishing MQTT_UNREACHABLE", s_ctx.disconnect_count);
+                publish_control(ControlType::MQTT_UNREACHABLE);
+                s_ctx.unreachable_notified = true;
+            }
+
             esp_wifi_connect();
         }
     }
@@ -49,12 +73,17 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         const auto *ev = static_cast<const ip_event_got_ip_t *>(event_data);
         const uint8_t last_octet = esp_ip4_addr4(&ev->ip_info.ip);
         send_wifi_status(true, last_octet);
+
+        s_ctx.disconnect_count = 0;
+        s_ctx.unreachable_notified = false;
+        publish_control(ControlType::WIFI_CONNECTED);
     }
 }
 
-void wifi_service_init(QueueHandle_t printQueue)
+void wifi_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue)
 {
     s_ctx.print_queue = printQueue;
+    s_ctx.control_queue = controlQueue;
     s_ctx.publish_update = true;
 
     esp_netif_create_default_wifi_sta();

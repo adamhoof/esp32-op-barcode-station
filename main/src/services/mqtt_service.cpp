@@ -1,7 +1,6 @@
 #include "services/mqtt_service.h"
 #include <cstdio>
 #include <cstring>
-#include <cerrno>
 #include <atomic>
 #include "sdkconfig.h"
 #include "esp_log.h"
@@ -32,6 +31,7 @@ static struct {
     esp_mqtt_client_handle_t client{};
     QueueHandle_t print_queue{};
     QueueHandle_t control_queue{};
+    esp_event_handler_instance_t barcode_handler{};
     std::atomic<bool> publish_update;
     std::atomic<bool> unreachable_notified;
     char topic_base[TOPIC_BASE_LEN]{};
@@ -40,19 +40,7 @@ static struct {
 
 static bool is_broker_unreachable(const esp_mqtt_event_t* event) {
     if (event == nullptr || event->error_handle == nullptr) return false;
-    if (event->error_handle->error_type != MQTT_ERROR_TYPE_TCP_TRANSPORT) return false;
-
-    switch (const int sock_errno = event->error_handle->esp_transport_sock_errno) {
-        case ENETUNREACH:
-        case EHOSTUNREACH:
-        case ETIMEDOUT:
-        case ECONNREFUSED:
-        case ENETDOWN:
-        case EHOSTDOWN:
-            return true;
-        default:
-            return false;
-    }
+    return event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT;
 }
 
 static void queue_mqtt_status(bool connected) {
@@ -190,6 +178,11 @@ static void on_barcode_scanned(void* handler_args, esp_event_base_t base, int32_
 }
 
 void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
+    if (s_ctx.client != nullptr) {
+        ESP_LOGI(TAG, "MQTT service already initialized, skipping init");
+        return;
+    }
+
     s_ctx.print_queue = printQueue;
     s_ctx.control_queue = controlQueue;
     s_ctx.publish_update = true;
@@ -226,12 +219,17 @@ void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
     s_ctx.client = esp_mqtt_client_init(&cfg);
 
     ESP_ERROR_CHECK(esp_mqtt_client_register_event(s_ctx.client, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, &mqtt_event_handler, nullptr));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(APP_EVENT, APP_EVENT_BARCODE_SCANNED, &on_barcode_scanned, nullptr, nullptr));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(APP_EVENT, APP_EVENT_BARCODE_SCANNED, &on_barcode_scanned, nullptr, &s_ctx.barcode_handler));
 
     ESP_ERROR_CHECK(esp_mqtt_client_start(s_ctx.client));
 }
 
 void mqtt_service_stop() {
+    if (s_ctx.barcode_handler != nullptr) {
+        ESP_ERROR_CHECK(esp_event_handler_instance_unregister(APP_EVENT, APP_EVENT_BARCODE_SCANNED, s_ctx.barcode_handler));
+        s_ctx.barcode_handler = nullptr;
+    }
+
     if (s_ctx.client != nullptr) {
         esp_mqtt_client_stop(s_ctx.client);
         esp_mqtt_client_destroy(s_ctx.client);

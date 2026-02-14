@@ -21,6 +21,36 @@
 
 static const char* TAG = "main";
 
+static const char* control_type_to_string(const ControlType type)
+{
+    switch (type) {
+        case ControlType::WAKE: return "WAKE";
+        case ControlType::SLEEP: return "SLEEP";
+        case ControlType::FIRMWARE: return "FIRMWARE";
+        case ControlType::SCANNER_CONF: return "SCANNER_CONF";
+        case ControlType::MQTT_UNREACHABLE: return "MQTT_UNREACHABLE";
+        case ControlType::WIFI_CONNECTED: return "WIFI_CONNECTED";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char* active_tasks_to_string(const EventBits_t task_bits)
+{
+    if (task_bits == 0) {
+        return "none";
+    }
+    if ((task_bits & (BIT_ACK_DISPLAY | BIT_ACK_BARCODE)) == (BIT_ACK_DISPLAY | BIT_ACK_BARCODE)) {
+        return "display, barcode";
+    }
+    if ((task_bits & BIT_ACK_DISPLAY) != 0) {
+        return "display";
+    }
+    if ((task_bits & BIT_ACK_BARCODE) != 0) {
+        return "barcode";
+    }
+    return "unknown";
+}
+
 static void init_system()
 {
     esp_err_t err = nvs_flash_init();
@@ -80,8 +110,7 @@ extern "C" [[noreturn]] void app_main(void)
     static QueueHandle_t controlQueue = xQueueCreate(3, sizeof(ControlMessage));
     static EventGroupHandle_t eventGroup = xEventGroupCreate();
 
-    wifi_service_init(printQueue);
-    mqtt_service_init(printQueue, controlQueue);
+    wifi_service_init(printQueue, controlQueue);
 
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "pool.ntp.org");
@@ -100,23 +129,25 @@ extern "C" [[noreturn]] void app_main(void)
     ControlMessage msg{};
 
     for (;;) {
-        if (xQueueReceive(controlQueue, &msg, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(controlQueue, &msg, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
 
-            ESP_LOGI(TAG, "Received Control Type: %d", (int)msg.type);
+        ESP_LOGI(TAG, "Received Control Type: %s", control_type_to_string(msg.type));
 
-            EventBits_t task_bits = 0;
-            if (h_display != nullptr) task_bits |= BIT_ACK_DISPLAY;
-            if (h_barcode != nullptr) task_bits |= BIT_ACK_BARCODE;
+        EventBits_t task_bits = 0;
+        if (h_display != nullptr) task_bits |= BIT_ACK_DISPLAY;
+        if (h_barcode != nullptr) task_bits |= BIT_ACK_BARCODE;
 
-            ESP_LOGI(TAG, "Active Tasks: %d", task_bits);
+        ESP_LOGI(TAG, "Active Tasks: %s", active_tasks_to_string(task_bits));
 
-            switch (msg.type) {
+        switch (msg.type) {
                 case ControlType::WAKE: {
-                        const esp_err_t persist_err = control_mode_store_set(PERSISTED_MODE_WAKE);
-                        if (persist_err != ESP_OK) {
-                            ESP_LOGW(TAG, "Failed to persist WAKE mode: %s", esp_err_to_name(persist_err));
-                            send_nvs_error(printQueue, "set wake", persist_err);
-                        }
+                    const esp_err_t persist_err = control_mode_store_set(PERSISTED_MODE_WAKE);
+                    if (persist_err != ESP_OK) {
+                        ESP_LOGW(TAG, "Failed to persist WAKE mode: %s", esp_err_to_name(persist_err));
+                        send_nvs_error(printQueue, "set wake", persist_err);
+                    }
                     xEventGroupClearBits(eventGroup, BIT_REQ_SLEEP | BIT_REQ_OTA | task_bits);
                     if (h_display == nullptr) {
                         xTaskCreate(display_task, "display", 4096, &display_params, 5, &h_display);
@@ -128,14 +159,18 @@ extern "C" [[noreturn]] void app_main(void)
                 }
 
                 case ControlType::SLEEP: {
-                        const esp_err_t persist_err = control_mode_store_set(PERSISTED_MODE_SLEEP);
-                        if (persist_err != ESP_OK) {
-                            ESP_LOGW(TAG, "Failed to persist SLEEP mode: %s", esp_err_to_name(persist_err));
-                            send_nvs_error(printQueue, "set sleep", persist_err);
-                        }
+                    const esp_err_t persist_err = control_mode_store_set(PERSISTED_MODE_SLEEP);
+                    if (persist_err != ESP_OK) {
+                        ESP_LOGW(TAG, "Failed to persist SLEEP mode: %s", esp_err_to_name(persist_err));
+                        send_nvs_error(printQueue, "set sleep", persist_err);
+                    }
                     xEventGroupClearBits(eventGroup, task_bits);
                     xEventGroupSetBits(eventGroup, BIT_REQ_SLEEP);
-                    xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, portMAX_DELAY);
+                    const EventBits_t acked = xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, pdMS_TO_TICKS(5000));
+                    if ((acked & task_bits) != task_bits) {
+                        ESP_LOGE(TAG, "SLEEP: task ACK timeout (got 0x%lx, expected 0x%lx), forcing sleep",
+                                 (unsigned long)acked, (unsigned long)task_bits);
+                    }
                     enter_deep_sleep(CONFIG_DEEP_SLEEP_DURATION);
                     break;
                 }
@@ -150,17 +185,17 @@ extern "C" [[noreturn]] void app_main(void)
                         send_nvs_error(printQueue, "read mode", err);
                     }
 
-                    ControlMessage next{};
-                    next.type = (persisted_mode == PERSISTED_MODE_SLEEP)
+                    ControlMessage fallback_msg{};
+                    fallback_msg.type = (persisted_mode == PERSISTED_MODE_SLEEP)
                         ? ControlType::SLEEP
                         : ControlType::WAKE;
+                    fallback_msg.payload[0] = '\0';
 
-                    if (xQueueSend(controlQueue, &next, 0) != pdTRUE) {
-                        ESP_LOGW(TAG, "Failed to enqueue fallback control message after MQTT_UNREACHABLE");
-                    } else {
-                        ESP_LOGI(TAG,
-                                 "Broker unreachable fallback enqueued: %s",
-                                 (next.type == ControlType::SLEEP) ? "SLEEP" : "WAKE");
+                    ESP_LOGI(TAG, "Unreachable fallback: %s",
+                             (fallback_msg.type == ControlType::SLEEP) ? "SLEEP" : "WAKE");
+
+                    if (xQueueSend(controlQueue, &fallback_msg, 0) != pdTRUE) {
+                        ESP_LOGW(TAG, "Failed to enqueue unreachable fallback control message");
                     }
                     break;
                 }
@@ -168,7 +203,11 @@ extern "C" [[noreturn]] void app_main(void)
                 case ControlType::FIRMWARE: {
                     xEventGroupClearBits(eventGroup, task_bits);
                     xEventGroupSetBits(eventGroup, BIT_REQ_OTA);
-                    xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, portMAX_DELAY);
+                    const EventBits_t acked = xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, pdMS_TO_TICKS(5000));
+                    if ((acked & task_bits) != task_bits) {
+                        ESP_LOGE(TAG, "FIRMWARE: task ACK timeout (got 0x%lx, expected 0x%lx), proceeding with OTA",
+                                 (unsigned long)acked, (unsigned long)task_bits);
+                    }
 
                     // free ram so that another tls handshake can happen safely, smol
                     delete_task_safe(h_display);
@@ -183,18 +222,25 @@ extern "C" [[noreturn]] void app_main(void)
                 }
 
                 case ControlType::SCANNER_CONF: {
-                    if (h_barcode == nullptr)  {
+                    if (h_barcode == nullptr) {
                         ESP_LOGE(TAG, "No Barcode Task Running!");
                         break;
                     }
                     ESP_LOGI(TAG, "Initiating Scanner Configuration...");
                     xEventGroupClearBits(eventGroup, BIT_ACK_BARCODE);
                     xEventGroupSetBits(eventGroup, BIT_REQ_BARCODE_SCANNER_CONF);
-                    xEventGroupWaitBits(eventGroup, BIT_ACK_BARCODE, pdFALSE, pdTRUE, portMAX_DELAY);
+                    const EventBits_t acked = xEventGroupWaitBits(eventGroup, BIT_ACK_BARCODE, pdFALSE, pdTRUE, pdMS_TO_TICKS(5000));
+                    if ((acked & BIT_ACK_BARCODE) != BIT_ACK_BARCODE) {
+                        ESP_LOGE(TAG, "SCANNER_CONF: barcode task ACK timeout");
+                    }
                     ESP_LOGI(TAG, "Scanner Configuration & Save Completed.");
                     break;
                 }
+
+                case ControlType::WIFI_CONNECTED: {
+                    mqtt_service_init(printQueue, controlQueue);
+                    break;
+                }
             }
-        }
     }
 }

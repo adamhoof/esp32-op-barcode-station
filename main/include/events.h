@@ -28,7 +28,8 @@ enum class ControlType {
     SLEEP,
     FIRMWARE,
     SCANNER_CONF,
-    MQTT_UNREACHABLE
+    MQTT_UNREACHABLE,
+    WIFI_CONNECTED,
 };
 
 struct ControlMessage {
