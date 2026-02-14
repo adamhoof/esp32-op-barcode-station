@@ -5,8 +5,7 @@
 #include <esp_event.h>
 
 // main -> tasks
-constexpr EventBits_t BIT_REQ_SLEEP = (1 << 0);
-constexpr EventBits_t BIT_REQ_OTA = (1 << 1);
+constexpr EventBits_t BIT_REQ_STOP = (1 << 0);
 constexpr EventBits_t BIT_REQ_BARCODE_SCANNER_CONF = (1 << 2);
 
 // tasks -> main

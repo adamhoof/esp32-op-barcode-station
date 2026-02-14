@@ -15,6 +15,8 @@
 #include "tasks/display_task.h"
 #include "tasks/barcode_task.h"
 #include "tasks/ota_task.h"
+#include "devices/display_device.h"
+#include "devices/barcode_device.h"
 #include "events.h"
 #include "print_message.h"
 #include "services/control_mode_store.h"
@@ -91,6 +93,19 @@ static void send_nvs_error(QueueHandle_t printQueue, const char* action, esp_err
     xQueueOverwrite(printQueue, &err_msg);
 }
 
+static void enforce_devices_sleep(DisplayDevice& display_device, BarcodeDevice& barcode_device)
+{
+    const esp_err_t display_err = display_device.sleep();
+    if (display_err != ESP_OK) {
+        ESP_LOGW(TAG, "Display sleep failed: %s", esp_err_to_name(display_err));
+    }
+
+    const esp_err_t barcode_err = barcode_device.sleep();
+    if (barcode_err != ESP_OK) {
+        ESP_LOGW(TAG, "Barcode sleep failed: %s", esp_err_to_name(barcode_err));
+    }
+}
+
 void time_sync_cb(struct timeval *tv)
 {
     time_t now;
@@ -118,8 +133,21 @@ extern "C" [[noreturn]] void app_main(void)
     sntp_set_time_sync_notification_cb(time_sync_cb);
     esp_sntp_init();
 
-    static DisplayTaskParams display_params { .printQueue = printQueue, .eventGroup = eventGroup };
-    static BarcodeTaskParams barcode_params { .printQueue = printQueue, .eventGroup = eventGroup };
+    static DisplayDevice display_device;
+    static BarcodeDevice barcode_device;
+
+    static DisplayTaskParams display_params {
+        .printQueue = printQueue,
+        .eventGroup = eventGroup,
+        .device = display_device,
+    };
+
+    static BarcodeTaskParams barcode_params {
+        .printQueue = printQueue,
+        .eventGroup = eventGroup,
+        .device = barcode_device,
+    };
+
     static OtaTaskParams ota_params { .eventGroup = eventGroup, .url = "" };
 
     static TaskHandle_t h_display = nullptr;
@@ -149,7 +177,7 @@ extern "C" [[noreturn]] void app_main(void)
                         ESP_LOGW(TAG, "Failed to persist WAKE mode: %s", esp_err_to_name(persist_err));
                         send_nvs_error(printQueue, "set wake", persist_err);
                     }
-                    xEventGroupClearBits(eventGroup, BIT_REQ_SLEEP | BIT_REQ_OTA | task_bits);
+                    xEventGroupClearBits(eventGroup, BIT_REQ_STOP | task_bits);
                     if (h_display == nullptr) {
                         xTaskCreate(display_task, "display", 4096, &display_params, 5, &h_display);
                     }
@@ -166,12 +194,15 @@ extern "C" [[noreturn]] void app_main(void)
                         send_nvs_error(printQueue, "set sleep", persist_err);
                     }
                     xEventGroupClearBits(eventGroup, task_bits);
-                    xEventGroupSetBits(eventGroup, BIT_REQ_SLEEP);
+                    xEventGroupSetBits(eventGroup, BIT_REQ_STOP);
                     const EventBits_t acked = xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, pdMS_TO_TICKS(5000));
                     if ((acked & task_bits) != task_bits) {
                         ESP_LOGE(TAG, "SLEEP: task ACK timeout (got 0x%lx, expected 0x%lx), forcing sleep",
                                  (unsigned long)acked, (unsigned long)task_bits);
                     }
+
+                    enforce_devices_sleep(display_device, barcode_device);
+
                     enter_deep_sleep(CONFIG_DEEP_SLEEP_DURATION);
                     break;
                 }
@@ -203,7 +234,7 @@ extern "C" [[noreturn]] void app_main(void)
 
                 case ControlType::FIRMWARE: {
                     xEventGroupClearBits(eventGroup, task_bits);
-                    xEventGroupSetBits(eventGroup, BIT_REQ_OTA);
+                    xEventGroupSetBits(eventGroup, BIT_REQ_STOP);
                     const EventBits_t acked = xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, pdMS_TO_TICKS(5000));
                     if ((acked & task_bits) != task_bits) {
                         ESP_LOGE(TAG, "FIRMWARE: task ACK timeout (got 0x%lx, expected 0x%lx), proceeding with OTA",
@@ -213,6 +244,10 @@ extern "C" [[noreturn]] void app_main(void)
                     // free ram so that another tls handshake can happen safely, smol
                     delete_task_safe(h_display);
                     delete_task_safe(h_barcode);
+
+                    display_device.deinit();
+                    barcode_device.deinit();
+
                     mqtt_service_stop();
                     vTaskDelay(pdMS_TO_TICKS(500));
 

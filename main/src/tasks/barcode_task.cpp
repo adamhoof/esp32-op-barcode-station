@@ -2,16 +2,11 @@
 #include <cctype>
 #include "events.h"
 #include "print_message.h"
-#include "driver/uart.h"
-#include "driver/gpio.h"
+#include "devices/barcode_device.h"
 #include "esp_event.h"
 #include "esp_log.h"
 
 static const char *TAG = "BARCODE";
-
-static const uint8_t CMD_SCANNER_SLEEP[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0xD9, 0xA5, 0xAB, 0xCD};
-static const uint8_t CMD_SCANNER_SENSITIVITY[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0x0F, 0x60, 0xAB, 0xCD};
-static const uint8_t CMD_SCANNER_SAVE[] = {0x7E, 0x00, 0x09, 0x01, 0x00, 0x00, 0x00, 0xAB, 0xCD};
 
 static bool is_numeric(const char *s) {
     if (s == nullptr || *s == '\0') return false;
@@ -21,9 +16,59 @@ static bool is_numeric(const char *s) {
     return true;
 }
 
-static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size_t len) {
-    uart_write_bytes(uart_port, (const char*)cmd, len);
-    vTaskDelay(pdMS_TO_TICKS(100));
+static void process_rx_chunk(const BarcodeTaskParams* params,
+                             const uint8_t* rx,
+                             const int n,
+                             char* buffer,
+                             size_t& buffer_occupancy,
+                             bool& overflow)
+{
+    for (int i = 0; i < n; ++i) {
+        const char c = static_cast<char>(rx[i]);
+
+        ESP_LOGD(TAG, "Char: %c (%02x)", (c >= 32 && c <= 126) ? c : '.', c);
+
+        if (c != CONFIG_BARCODE_DELIMITER && c != '\n' && c != '\r') {
+            if (buffer_occupancy < CONFIG_MAX_BARCODE_BUFFER_SIZE) {
+                buffer[buffer_occupancy++] = c;
+            } else {
+                overflow = true;
+            }
+            continue;
+        }
+
+        if (buffer_occupancy == 0) {
+            continue;
+        }
+
+        if (overflow) {
+            PrintMessage msg{};
+            msg.type = ERROR_MSG;
+            strlcpy(msg.data.error.msg, "Barcode too long", sizeof(msg.data.error.msg));
+            xQueueSend(params->printQueue, &msg, 0);
+
+            buffer_occupancy = 0;
+            overflow = false;
+            continue;
+        }
+
+        buffer[buffer_occupancy] = '\0';
+        ESP_LOGD(TAG, "Scanned: %s", buffer);
+
+        if (is_numeric(buffer)) {
+            ScanEvent evt{};
+            strlcpy(evt.barcode, buffer, sizeof(evt.barcode));
+            if (esp_event_post(APP_EVENT, APP_EVENT_BARCODE_SCANNED, &evt, sizeof(evt), pdMS_TO_TICKS(3000)) != ESP_OK) {
+                ESP_LOGW(TAG, "Event post timed out, barcode dropped");
+            }
+        } else {
+            PrintMessage msg{};
+            msg.type = ERROR_MSG;
+            strlcpy(msg.data.error.msg, "Zkuste prosim znovu...", sizeof(msg.data.error.msg));
+            xQueueSend(params->printQueue, &msg, 0);
+        }
+        buffer_occupancy = 0;
+    }
 }
 
 [[noreturn]] void barcode_task(void *pvParameters) {
@@ -31,37 +76,11 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
 
     ESP_LOGD(TAG, "Barcode task started");
 
-    const auto *params = static_cast<const BarcodeTaskParams *>(pvParameters);
+    const auto* params = static_cast<const BarcodeTaskParams*>(pvParameters);
+    BarcodeDevice& device = params->device;
 
-    const uart_config_t cfg = {
-        .baud_rate = CONFIG_BARCODE_BAUD_RATE,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .rx_flow_ctrl_thresh = 0,
-        .source_clk = UART_SCLK_DEFAULT,
-        .flags = {
-            .allow_pd = 0,
-            .backup_before_sleep = 0
-        }
-    };
-
-    ESP_ERROR_CHECK(uart_param_config(UART_NUM_1, &cfg));
-
-    ESP_ERROR_CHECK(uart_set_pin(UART_NUM_1,
-                                 CONFIG_BARCODE_TX_PIN,
-                                 CONFIG_BARCODE_RX_PIN,
-                                 UART_PIN_NO_CHANGE,
-                                 UART_PIN_NO_CHANGE));
-
-    ESP_ERROR_CHECK(uart_driver_install(UART_NUM_1, 256, 0, 0, nullptr, 0));
-
-    gpio_set_pull_mode((gpio_num_t)CONFIG_BARCODE_RX_PIN, GPIO_PULLUP_ONLY);
-    uart_flush_input(UART_NUM_1);
-
-    const uint8_t wake_byte = 0x00;
-    uart_write_bytes(UART_NUM_1, &wake_byte, 1);
+    ESP_ERROR_CHECK(device.init());
+    ESP_ERROR_CHECK(device.wake());
 
     uint8_t rx[64];
     char buffer[CONFIG_MAX_BARCODE_BUFFER_SIZE + 1];
@@ -71,20 +90,19 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
     for (;;) {
         const EventBits_t req_bits = xEventGroupWaitBits(
             params->eventGroup,
-            BIT_REQ_SLEEP | BIT_REQ_OTA | BIT_REQ_BARCODE_SCANNER_CONF,
+            BIT_REQ_STOP | BIT_REQ_BARCODE_SCANNER_CONF,
             pdFALSE,
             pdFALSE,
             0
         );
 
-        if ((req_bits & BIT_REQ_SLEEP) != 0) {
-            send_uart_cmd(UART_NUM_1, CMD_SCANNER_SLEEP, sizeof(CMD_SCANNER_SLEEP));
-            xEventGroupSetBits(params->eventGroup, BIT_ACK_BARCODE);
-            vTaskSuspend(nullptr);
-        }
+        if ((req_bits & BIT_REQ_STOP) != 0) {
+            const int n_pending = device.read_bytes(rx, sizeof(rx), 0);
+            if (n_pending > 0) {
+                process_rx_chunk(params, rx, n_pending, buffer, buffer_occupancy, overflow);
+            }
 
-        if ((req_bits & BIT_REQ_OTA) != 0) {
-            uart_driver_delete(UART_NUM_1);
+            ESP_LOGI(TAG, "Barcode task ready, acknowledging STOP and suspending");
             xEventGroupSetBits(params->eventGroup, BIT_ACK_BARCODE);
             vTaskSuspend(nullptr);
         }
@@ -92,13 +110,12 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
         if ((req_bits & BIT_REQ_BARCODE_SCANNER_CONF) != 0) {
             ESP_LOGW(TAG, "STARTING SCANNER CONFIGURATION...");
 
-            send_uart_cmd(UART_NUM_1, CMD_SCANNER_SENSITIVITY, sizeof(CMD_SCANNER_SENSITIVITY));
-            send_uart_cmd(UART_NUM_1, CMD_SCANNER_SAVE, sizeof(CMD_SCANNER_SAVE));
+            (void)device.configure();
 
             ESP_LOGW(TAG, "SCANNER CONFIG COMPLETE. Reading response buffer...");
 
             uint8_t dump[256];
-            int len = uart_read_bytes(UART_NUM_1, dump, sizeof(dump), pdMS_TO_TICKS(200));
+            int len = device.read_bytes(dump, sizeof(dump), pdMS_TO_TICKS(200));
             if (len > 0) {
                 ESP_LOG_BUFFER_HEX(TAG, dump, len);
             }
@@ -107,7 +124,7 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
             xEventGroupSetBits(params->eventGroup, BIT_ACK_BARCODE);
         }
 
-        const int n = uart_read_bytes(UART_NUM_1, rx, sizeof(rx), pdMS_TO_TICKS(50));
+        const int n = device.read_bytes(rx, sizeof(rx), pdMS_TO_TICKS(50));
 
         if (n < 0) {
             ESP_LOGE(TAG, "UART Read Error");
@@ -119,51 +136,6 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
             continue;
         }
 
-        for (int i = 0; i < n; ++i) {
-            const char c = static_cast<char>(rx[i]);
-
-            ESP_LOGD(TAG, "Char: %c (%02x)", (c >= 32 && c <= 126) ? c : '.', c);
-
-            if (c != CONFIG_BARCODE_DELIMITER && c != '\n' && c != '\r') {
-                if (buffer_occupancy < CONFIG_MAX_BARCODE_BUFFER_SIZE) {
-                    buffer[buffer_occupancy++] = c;
-                } else {
-                    overflow = true;
-                }
-                continue;
-            }
-
-            if (buffer_occupancy == 0) {
-                continue;
-            }
-
-            if (overflow) {
-                PrintMessage msg{};
-                msg.type = ERROR_MSG;
-                strlcpy(msg.data.error.msg, "Barcode too long", sizeof(msg.data.error.msg));
-                xQueueSend(params->printQueue, &msg, 0);
-
-                buffer_occupancy = 0;
-                overflow = false;
-                continue;
-            }
-
-            buffer[buffer_occupancy] = '\0';
-            ESP_LOGD(TAG, "Scanned: %s", buffer);
-
-            if (is_numeric(buffer)) {
-                ScanEvent evt{};
-                strlcpy(evt.barcode, buffer, sizeof(evt.barcode));
-                if (esp_event_post(APP_EVENT, APP_EVENT_BARCODE_SCANNED, &evt, sizeof(evt), pdMS_TO_TICKS(3000)) != ESP_OK) {
-                    ESP_LOGW(TAG, "Event post timed out, barcode dropped");
-                }
-            } else {
-                PrintMessage msg{};
-                msg.type = ERROR_MSG;
-                strlcpy(msg.data.error.msg, "Zkuste prosim znovu...", sizeof(msg.data.error.msg));
-                xQueueSend(params->printQueue, &msg, 0);
-            }
-            buffer_occupancy = 0;
-        }
+        process_rx_chunk(params, rx, n, buffer, buffer_occupancy, overflow);
     }
 }

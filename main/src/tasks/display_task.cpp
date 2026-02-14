@@ -3,32 +3,17 @@
 #include <cstring>
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
-#include "esp_lcd_panel_io.h"
-#include "esp_lcd_panel_ops.h"
-#include "esp_lcd_ili9341.h"
-#include "esp_lvgl_port_disp.h"
-#include "driver/spi_master.h"
-#include "driver/gpio.h"
-#include "driver/ledc.h"
 #include "soc/soc_caps.h"
 #include "lvgl.h"
-#include "sdkconfig.h"
 #include "events.h"
 #include "print_message.h"
+#include "devices/display_device.h"
 
 static const char *TAG = "DISPLAY";
 
 #if !SOC_RTCIO_HOLD_SUPPORTED
     #error "CRITICAL ERROR: The selected ESP chip does not support RTC GPIO Hold!"
 #endif
-
-#define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LEDC_TIMER              LEDC_TIMER_0
-#define LEDC_DUTY_RES           LEDC_TIMER_8_BIT
-#define LEDC_FREQUENCY          5000
-#define LEDC_DUTY_ON            200
-
-#define LEDC_FADE_DELAY_MS      10
 
 struct UiContext {
     lv_obj_t *root;
@@ -44,67 +29,6 @@ struct UiContext {
     int ip_suffix;
     bool first_scan_done;
 };
-
-static void init_backlight_pwm() {
-    gpio_hold_dis((gpio_num_t)CONFIG_LED_PIN);
-
-    ledc_timer_config_t ledc_timer_cfg{};
-    ledc_timer_cfg.speed_mode       = LEDC_MODE;
-    ledc_timer_cfg.duty_resolution  = LEDC_DUTY_RES;
-    ledc_timer_cfg.timer_num        = LEDC_TIMER;
-    ledc_timer_cfg.freq_hz          = LEDC_FREQUENCY;
-    ledc_timer_cfg.clk_cfg          = LEDC_AUTO_CLK;
-    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer_cfg));
-
-    ledc_channel_config_t chan_cfg{};
-    chan_cfg.gpio_num       = CONFIG_LED_PIN;
-    chan_cfg.speed_mode     = LEDC_MODE;
-    chan_cfg.channel        = LEDC_CHANNEL_0;
-    chan_cfg.intr_type      = LEDC_INTR_DISABLE;
-    chan_cfg.timer_sel      = LEDC_TIMER;
-    chan_cfg.duty           = 0;
-    chan_cfg.hpoint         = 0;
-    ESP_ERROR_CHECK(ledc_channel_config(&chan_cfg));
-}
-
-static void set_backlight_brightness(uint32_t duty) {
-    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, duty);
-    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-}
-
-static void display_backlight_fade_on(const uint32_t max_brightness, const uint32_t fade_step = 20)
-{
-    uint32_t duty = 0;
-    while (true) {
-        set_backlight_brightness(duty);
-        vTaskDelay(pdMS_TO_TICKS(LEDC_FADE_DELAY_MS));
-
-        if (duty == max_brightness) {
-            break;
-        }
-
-        duty = (duty + fade_step >= max_brightness) ? max_brightness : (duty + fade_step);
-    }
-
-    set_backlight_brightness(max_brightness);
-}
-
-static void display_backlight_fade_off(const uint32_t fade_step = 20)
-{
-    uint32_t duty = LEDC_DUTY_ON;
-    while (true) {
-        set_backlight_brightness(duty);
-        vTaskDelay(pdMS_TO_TICKS(LEDC_FADE_DELAY_MS));
-
-        if (duty == 0) {
-            break;
-        }
-
-        duty = (duty <= fade_step) ? 0 : (duty - fade_step);
-    }
-
-    set_backlight_brightness(0);
-}
 
 static void ui_set_text(lv_obj_t *label, const char *text, uint32_t color_hex, const lv_font_t *font)
 {
@@ -236,85 +160,32 @@ static void ui_show_product(UiContext &ui, const ProductData &p)
     ui_set_text(ui.lbl_stock, buf, 0xFFFFFF, &lv_font_montserrat_22);
 }
 
-static void ui_show_updating(UiContext &ui)
+static void ui_handle_message(UiContext &ui, const PrintMessage &msg)
 {
-    ui.first_scan_done = true;
-    lv_obj_add_flag(ui.cont_status, LV_OBJ_FLAG_HIDDEN);
-    ui_set_text(ui.lbl_name, "UPDATING...", 0xFFFF00, &lv_font_montserrat_22);
-    ui_set_text(ui.lbl_price, "", 0x000000, &lv_font_montserrat_22);
-    ui_set_text(ui.lbl_unit, "", 0x000000, &lv_font_montserrat_22);
-    ui_set_text(ui.lbl_stock, "", 0x000000, &lv_font_montserrat_22);
-}
+    switch (msg.type) {
+    case WIFI_STATUS:
+        ui.wifi_connected = msg.data.wifi.connected;
+        if (ui.wifi_connected) {
+            ui.ip_suffix = msg.data.wifi.ipLastOctet;
+        } else {
+            ui.ip_suffix = -1;
+        }
+        ui_render_status(ui);
+        break;
 
-static void init_display_resources(esp_lcd_panel_io_handle_t* out_io, esp_lcd_panel_handle_t* out_panel, lv_display_t** out_disp) {
-    spi_bus_config_t bus_cfg{};
-    bus_cfg.sclk_io_num = CONFIG_TFT_SCLK;
-    bus_cfg.mosi_io_num = CONFIG_TFT_MOSI;
-    bus_cfg.miso_io_num = CONFIG_TFT_MISO;
-    bus_cfg.quadwp_io_num = -1;
-    bus_cfg.quadhd_io_num = -1;
-    bus_cfg.max_transfer_sz = 320 * 240 * sizeof(uint16_t) + 100;
-    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
+    case MQTT_STATUS:
+        ui.mqtt_connected = msg.data.mqtt.connected;
+        ui_render_status(ui);
+        break;
 
-    esp_lcd_panel_io_handle_t io_handle = nullptr;
-    esp_lcd_panel_io_spi_config_t io_cfg{};
-    io_cfg.cs_gpio_num = CONFIG_TFT_CS;
-    io_cfg.dc_gpio_num = CONFIG_TFT_DC;
-    io_cfg.pclk_hz = 20 * 1000 * 1000;
-    io_cfg.trans_queue_depth = 10;
-    io_cfg.lcd_cmd_bits = 8;
-    io_cfg.lcd_param_bits = 8;
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI2_HOST, &io_cfg, &io_handle));
+    case ERROR_MSG:
+        ui_show_error(ui, msg.data.error.msg);
+        break;
 
-    esp_lcd_panel_handle_t panel = nullptr;
-    esp_lcd_panel_dev_config_t panel_cfg{};
-    panel_cfg.reset_gpio_num = CONFIG_TFT_RST;
-    panel_cfg.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR;
-    panel_cfg.bits_per_pixel = 16;
-
-    ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(io_handle, &panel_cfg, &panel));
-    ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
-    ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
-
-    vTaskDelay(pdMS_TO_TICKS(120));
-
-    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
-    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel, false));
-    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, true, true));
-    ESP_ERROR_CHECK(esp_lcd_panel_set_gap(panel, 0, 0));
-
-    init_backlight_pwm();
-    display_backlight_fade_on(LEDC_DUTY_ON);
-
-    const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
-
-    lvgl_port_display_cfg_t disp_cfg{};
-    disp_cfg.io_handle = io_handle;
-    disp_cfg.panel_handle = panel;
-    disp_cfg.buffer_size = 320 * 40;
-    disp_cfg.double_buffer = false;
-    disp_cfg.hres = 320;
-    disp_cfg.vres = 240;
-    disp_cfg.monochrome = false;
-    disp_cfg.color_format = LV_COLOR_FORMAT_RGB565;
-    disp_cfg.flags.swap_bytes = true;
-
-    disp_cfg.rotation.swap_xy = true;
-    disp_cfg.rotation.mirror_x = false;
-    disp_cfg.rotation.mirror_y = false;
-
-    disp_cfg.flags.buff_dma = true;
-    *out_disp = lvgl_port_add_disp(&disp_cfg);
-    *out_io = io_handle;
-    *out_panel = panel;
-}
-
-static void deinit_display_resources(esp_lcd_panel_io_handle_t io, esp_lcd_panel_handle_t panel, lv_display_t* disp) {
-    if (disp) lv_display_delete(disp);
-    if (panel) esp_lcd_panel_del(panel);
-    if (io) esp_lcd_panel_io_del(io);
-    spi_bus_free(SPI2_HOST);
+    case PRODUCT_DATA:
+        ui_show_product(ui, msg.data.product);
+        break;
+    }
 }
 
 [[noreturn]] void display_task(void *pvParameters)
@@ -323,13 +194,10 @@ static void deinit_display_resources(esp_lcd_panel_io_handle_t io, esp_lcd_panel
 
     ESP_LOGD(TAG, "Display task started");
 
-    const auto *params = static_cast<const DisplayTaskParams *>(pvParameters);
+    const auto* params = static_cast<const DisplayTaskParams*>(pvParameters);
+    DisplayDevice& device = params->device;
 
-    esp_lcd_panel_io_handle_t io_handle = nullptr;
-    esp_lcd_panel_handle_t panel_handle = nullptr;
-    lv_display_t *disp = nullptr;
-
-    init_display_resources(&io_handle, &panel_handle, &disp);
+    ESP_ERROR_CHECK(device.init());
 
     UiContext ui{};
 
@@ -340,49 +208,24 @@ static void deinit_display_resources(esp_lcd_panel_io_handle_t io, esp_lcd_panel
     for (;;) {
         const EventBits_t req_bits = xEventGroupWaitBits(
             params->eventGroup,
-            BIT_REQ_SLEEP | BIT_REQ_OTA,
+            BIT_REQ_STOP,
             pdFALSE,
             pdFALSE,
             0
         );
 
-        if ((req_bits & BIT_REQ_SLEEP) != 0) {
-            if (!lvgl_port_lock(1000)) {
-                ESP_LOGW(TAG, "LVGL lock timeout during sleep shutdown, skipping display cleanup");
-                xEventGroupSetBits(params->eventGroup, BIT_ACK_DISPLAY);
-                vTaskSuspend(nullptr);
+        if ((req_bits & BIT_REQ_STOP) != 0) {
+            PrintMessage pending_msg{};
+            if (xQueueReceive(params->printQueue, &pending_msg, 0) == pdTRUE) {
+                if (lvgl_port_lock(1000)) {
+                    ui_handle_message(ui, pending_msg);
+                    lvgl_port_unlock();
+                } else {
+                    ESP_LOGW(TAG, "LVGL lock timeout during STOP, skipping pending frame");
+                }
             }
 
-            display_backlight_fade_off();
-
-            ledc_stop(LEDC_MODE, LEDC_CHANNEL_0, 0);
-            gpio_set_direction((gpio_num_t)CONFIG_LED_PIN, GPIO_MODE_OUTPUT);
-            gpio_set_level((gpio_num_t)CONFIG_LED_PIN, 0);
-            gpio_hold_en((gpio_num_t)CONFIG_LED_PIN);
-
-            esp_lcd_panel_io_tx_param(io_handle, 0x28, nullptr, 0);
-            vTaskDelay(pdMS_TO_TICKS(20));
-
-            esp_lcd_panel_io_tx_param(io_handle, 0x10, nullptr, 0);
-            vTaskDelay(pdMS_TO_TICKS(120));
-
-            lvgl_port_unlock();
-
-            xEventGroupSetBits(params->eventGroup, BIT_ACK_DISPLAY);
-            vTaskSuspend(nullptr);
-        }
-
-        if ((req_bits & BIT_REQ_OTA) != 0) {
-            if (lvgl_port_lock(1000)) {
-                ui_show_updating(ui);
-                lvgl_port_unlock();
-            } else {
-                ESP_LOGW(TAG, "LVGL lock timeout during OTA, skipping UI update");
-            }
-
-            vTaskDelay(pdMS_TO_TICKS(500));
-            deinit_display_resources(io_handle, panel_handle, disp);
-
+            ESP_LOGI(TAG, "Display task ready, acknowledging STOP and suspending");
             xEventGroupSetBits(params->eventGroup, BIT_ACK_DISPLAY);
             vTaskSuspend(nullptr);
         }
@@ -397,30 +240,7 @@ static void deinit_display_resources(esp_lcd_panel_io_handle_t io, esp_lcd_panel
             continue;
         }
 
-        switch (msg.type) {
-        case WIFI_STATUS:
-            ui.wifi_connected = msg.data.wifi.connected;
-            if (ui.wifi_connected) {
-                ui.ip_suffix = msg.data.wifi.ipLastOctet;
-            } else {
-                ui.ip_suffix = -1;
-            }
-            ui_render_status(ui);
-            break;
-
-        case MQTT_STATUS:
-            ui.mqtt_connected = msg.data.mqtt.connected;
-            ui_render_status(ui);
-            break;
-
-        case ERROR_MSG:
-            ui_show_error(ui, msg.data.error.msg);
-            break;
-
-        case PRODUCT_DATA:
-            ui_show_product(ui, msg.data.product);
-            break;
-        }
+        ui_handle_message(ui, msg);
 
         lvgl_port_unlock();
     }
