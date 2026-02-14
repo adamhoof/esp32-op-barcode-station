@@ -1,6 +1,7 @@
 #include "tasks/display_task.h"
 #include <cstdio>
 #include <cstring>
+#include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -14,6 +15,8 @@
 #include "sdkconfig.h"
 #include "events.h"
 #include "print_message.h"
+
+static const char *TAG = "DISPLAY";
 
 #if !SOC_RTCIO_HOLD_SUPPORTED
     #error "CRITICAL ERROR: The selected ESP chip does not support RTC GPIO Hold!"
@@ -316,6 +319,8 @@ static void deinit_display_resources(esp_lcd_panel_io_handle_t io, esp_lcd_panel
 
 [[noreturn]] void display_task(void *pvParameters)
 {
+    ESP_LOGI(TAG, "Display task started");
+
     const auto *params = static_cast<const DisplayTaskParams *>(pvParameters);
 
     esp_lcd_panel_io_handle_t io_handle = nullptr;
@@ -340,7 +345,11 @@ static void deinit_display_resources(esp_lcd_panel_io_handle_t io, esp_lcd_panel
         );
 
         if ((req_bits & BIT_REQ_SLEEP) != 0) {
-            lvgl_port_lock(0);
+            if (!lvgl_port_lock(1000)) {
+                ESP_LOGW(TAG, "LVGL lock timeout during sleep shutdown, skipping display cleanup");
+                xEventGroupSetBits(params->eventGroup, BIT_ACK_DISPLAY);
+                vTaskSuspend(nullptr);
+            }
 
             display_backlight_fade_off();
 
@@ -362,9 +371,12 @@ static void deinit_display_resources(esp_lcd_panel_io_handle_t io, esp_lcd_panel
         }
 
         if ((req_bits & BIT_REQ_OTA) != 0) {
-            lvgl_port_lock(0);
-            ui_show_updating(ui);
-            lvgl_port_unlock();
+            if (lvgl_port_lock(1000)) {
+                ui_show_updating(ui);
+                lvgl_port_unlock();
+            } else {
+                ESP_LOGW(TAG, "LVGL lock timeout during OTA, skipping UI update");
+            }
 
             vTaskDelay(pdMS_TO_TICKS(500));
             deinit_display_resources(io_handle, panel_handle, disp);
@@ -378,7 +390,10 @@ static void deinit_display_resources(esp_lcd_panel_io_handle_t io, esp_lcd_panel
             continue;
         }
 
-        lvgl_port_lock(0);
+        if (!lvgl_port_lock(1000)) {
+            ESP_LOGW(TAG, "LVGL lock timeout, skipping frame");
+            continue;
+        }
 
         switch (msg.type) {
         case WIFI_STATUS:

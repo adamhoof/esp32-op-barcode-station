@@ -27,6 +27,8 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
 }
 
 [[noreturn]] void barcode_task(void *pvParameters) {
+    ESP_LOGI(TAG, "Barcode task started");
+
     const auto *params = static_cast<const BarcodeTaskParams *>(pvParameters);
 
     const uart_config_t cfg = {
@@ -152,7 +154,9 @@ static void send_uart_cmd(const uart_port_t& uart_port, const uint8_t* cmd, size
             if (is_numeric(buffer)) {
                 ScanEvent evt{};
                 strlcpy(evt.barcode, buffer, sizeof(evt.barcode));
-                esp_event_post(APP_EVENT, APP_EVENT_BARCODE_SCANNED, &evt, sizeof(evt), portMAX_DELAY);
+                if (esp_event_post(APP_EVENT, APP_EVENT_BARCODE_SCANNED, &evt, sizeof(evt), pdMS_TO_TICKS(3000)) != ESP_OK) {
+                    ESP_LOGW(TAG, "Event post timed out, barcode dropped");
+                }
             } else {
                 PrintMessage msg{};
                 msg.type = ERROR_MSG;
