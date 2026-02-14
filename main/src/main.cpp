@@ -158,8 +158,6 @@ extern "C" [[noreturn]] void app_main(void)
     static TaskHandle_t h_display = nullptr;
     static TaskHandle_t h_barcode = nullptr;
 
-    xTaskCreate(display_task, "display", 4096, &display_params, 5, &h_display);
-
     ControlMessage msg{};
 
     for (;;) {
@@ -200,10 +198,12 @@ extern "C" [[noreturn]] void app_main(void)
                     }
                     xEventGroupClearBits(eventGroup, task_bits);
                     xEventGroupSetBits(eventGroup, BIT_REQ_STOP);
-                    const EventBits_t acked = xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, pdMS_TO_TICKS(5000));
-                    if ((acked & task_bits) != task_bits) {
-                        ESP_LOGE(TAG, "SLEEP: task ACK timeout (got 0x%lx, expected 0x%lx), forcing sleep",
-                                 (unsigned long)acked, (unsigned long)task_bits);
+                    if (task_bits != 0) {
+                        const EventBits_t acked = xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, pdMS_TO_TICKS(5000));
+                        if ((acked & task_bits) != task_bits) {
+                            ESP_LOGE(TAG, "SLEEP: task ACK timeout (got 0x%lx, expected 0x%lx), forcing sleep",
+                                     (unsigned long)acked, (unsigned long)task_bits);
+                        }
                     }
 
                     enforce_devices_sleep(display_device, barcode_device);
@@ -240,10 +240,12 @@ extern "C" [[noreturn]] void app_main(void)
                 case ControlType::FIRMWARE: {
                     xEventGroupClearBits(eventGroup, task_bits);
                     xEventGroupSetBits(eventGroup, BIT_REQ_STOP);
-                    const EventBits_t acked = xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, pdMS_TO_TICKS(5000));
-                    if ((acked & task_bits) != task_bits) {
-                        ESP_LOGE(TAG, "FIRMWARE: task ACK timeout (got 0x%lx, expected 0x%lx), proceeding with OTA",
-                                 (unsigned long)acked, (unsigned long)task_bits);
+                    if (task_bits != 0) {
+                        const EventBits_t acked = xEventGroupWaitBits(eventGroup, task_bits, pdFALSE, pdTRUE, pdMS_TO_TICKS(5000));
+                        if ((acked & task_bits) != task_bits) {
+                            ESP_LOGE(TAG, "FIRMWARE: task ACK timeout (got 0x%lx, expected 0x%lx), proceeding with OTA",
+                                     (unsigned long)acked, (unsigned long)task_bits);
+                        }
                     }
 
                     // free ram so that another tls handshake can happen safely, smol
