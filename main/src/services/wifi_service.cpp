@@ -1,6 +1,5 @@
 #include "services/wifi_service.h"
 #include <cstring>
-#include <atomic>
 #include "sdkconfig.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -18,27 +17,18 @@ constexpr int WIFI_MAX_FAILURES = 3;
 static struct {
     QueueHandle_t print_queue{};
     QueueHandle_t control_queue{};
-    std::atomic<bool> publish_update;
     int disconnect_count{0};
     bool unreachable_notified{false};
 } s_ctx;
 
 static void send_wifi_status(bool connected, uint8_t last_octet = 0)
 {
-    if (!s_ctx.publish_update) {
-        return;
-    }
-
     PrintMessage msg{};
     msg.type = WIFI_STATUS;
     msg.data.wifi.connected = connected;
     msg.data.wifi.ipLastOctet = last_octet;
 
     xQueueSend(s_ctx.print_queue, &msg, 0);
-
-    if (connected) {
-        s_ctx.publish_update = false;
-    }
 }
 
 static void publish_control(ControlType type) {
@@ -86,7 +76,6 @@ void wifi_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue)
 
     s_ctx.print_queue = printQueue;
     s_ctx.control_queue = controlQueue;
-    s_ctx.publish_update = true;
 
     esp_netif_create_default_wifi_sta();
 

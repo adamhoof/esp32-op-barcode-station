@@ -32,7 +32,6 @@ static struct {
     QueueHandle_t print_queue{};
     QueueHandle_t control_queue{};
     esp_event_handler_instance_t barcode_handler{};
-    std::atomic<bool> publish_update;
     std::atomic<bool> unreachable_notified;
     char topic_base[TOPIC_BASE_LEN]{};
     char client_id[13]{};
@@ -44,14 +43,10 @@ static bool is_broker_unreachable(const esp_mqtt_event_t* event) {
 }
 
 static void queue_mqtt_status(bool connected) {
-    if (!s_ctx.publish_update) return;
-
     PrintMessage msg{};
     msg.type = MQTT_STATUS;
     msg.data.mqtt.connected = connected;
     xQueueSend(s_ctx.print_queue, &msg, 0);
-
-    if (connected) s_ctx.publish_update = false;
 }
 
 static void publish_control(ControlType type, const char* payload = nullptr, size_t len = 0) {
@@ -187,7 +182,6 @@ void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
 
     s_ctx.print_queue = printQueue;
     s_ctx.control_queue = controlQueue;
-    s_ctx.publish_update = true;
     s_ctx.unreachable_notified = false;
 
     uint8_t mac[6]{};

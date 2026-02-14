@@ -17,6 +17,7 @@ static const char *TAG = "DISPLAY";
 
 struct UiContext {
     lv_obj_t *root;
+    lv_obj_t *cont_main;
     lv_obj_t *cont_status;
     lv_obj_t *lbl_wifi;
     lv_obj_t *lbl_mqtt;
@@ -27,7 +28,6 @@ struct UiContext {
     bool wifi_connected;
     bool mqtt_connected;
     int ip_suffix;
-    bool first_scan_done;
 };
 
 static void ui_set_text(lv_obj_t *label, const char *text, uint32_t color_hex, const lv_font_t *font)
@@ -40,13 +40,6 @@ static void ui_set_text(lv_obj_t *label, const char *text, uint32_t color_hex, c
 
 static void ui_render_status(const UiContext &ui)
 {
-    if (ui.first_scan_done) {
-        if (!lv_obj_has_flag(ui.cont_status, LV_OBJ_FLAG_HIDDEN)) {
-            lv_obj_add_flag(ui.cont_status, LV_OBJ_FLAG_HIDDEN);
-        }
-        return;
-    }
-
     char wifi_buf[32];
     if (ui.wifi_connected) {
         if (ui.ip_suffix >= 0) {
@@ -54,15 +47,15 @@ static void ui_render_status(const UiContext &ui)
         } else {
             snprintf(wifi_buf, sizeof(wifi_buf), "WiFi");
         }
-        ui_set_text(ui.lbl_wifi, wifi_buf, 0x00FF00, &lv_font_montserrat_22);
+        ui_set_text(ui.lbl_wifi, wifi_buf, 0x00FF00, &lv_font_montserrat_10);
     } else {
-        ui_set_text(ui.lbl_wifi, "WiFi", 0xFF0000, &lv_font_montserrat_22);
+        ui_set_text(ui.lbl_wifi, "WiFi", 0xFF0000, &lv_font_montserrat_10);
     }
 
     if (ui.mqtt_connected) {
-        ui_set_text(ui.lbl_mqtt, "MQTT", 0x00FF00, &lv_font_montserrat_22);
+        ui_set_text(ui.lbl_mqtt, "MQTT", 0x00FF00, &lv_font_montserrat_10);
     } else {
-        ui_set_text(ui.lbl_mqtt, "MQTT", 0xFF0000, &lv_font_montserrat_22);
+        ui_set_text(ui.lbl_mqtt, "MQTT", 0xFF0000, &lv_font_montserrat_10);
     }
 }
 
@@ -73,47 +66,48 @@ static void ui_init(UiContext &ui)
     lv_obj_set_style_bg_color(ui.root, lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(ui.root, LV_SCROLLBAR_MODE_OFF);
 
-    lv_obj_t *cont = lv_obj_create(ui.root);
-    lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(cont, lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_border_width(cont, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(cont, 5, LV_PART_MAIN);
-    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(cont, 20, LV_PART_MAIN);
-    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
+    ui.cont_main = lv_obj_create(ui.root);
+    lv_obj_set_size(ui.cont_main, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(ui.cont_main, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_border_width(ui.cont_main, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(ui.cont_main, 5, LV_PART_MAIN);
+    lv_obj_set_flex_flow(ui.cont_main, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(ui.cont_main, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(ui.cont_main, 16, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(ui.cont_main, LV_SCROLLBAR_MODE_OFF);
 
-    ui.cont_status = lv_obj_create(cont);
-    lv_obj_set_size(ui.cont_status, LV_PCT(100), LV_SIZE_CONTENT);
+    ui.cont_status = lv_obj_create(ui.root);
+    lv_obj_set_size(ui.cont_status, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_color(ui.cont_status, lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_border_width(ui.cont_status, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(ui.cont_status, 0, LV_PART_MAIN);
     lv_obj_set_flex_flow(ui.cont_status, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(ui.cont_status, 2, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(ui.cont_status, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_align(ui.cont_status, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
 
     ui.lbl_wifi = lv_label_create(ui.cont_status);
     ui.lbl_mqtt = lv_label_create(ui.cont_status);
 
-    ui.lbl_name = lv_label_create(cont);
+    ui.lbl_name = lv_label_create(ui.cont_main);
     lv_label_set_long_mode(ui.lbl_name, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(ui.lbl_name, LV_PCT(100));
 
-    ui.lbl_price = lv_label_create(cont);
+    ui.lbl_price = lv_label_create(ui.cont_main);
     lv_label_set_long_mode(ui.lbl_price, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(ui.lbl_price, LV_PCT(100));
 
-    ui.lbl_unit = lv_label_create(cont);
+    ui.lbl_unit = lv_label_create(ui.cont_main);
     lv_label_set_long_mode(ui.lbl_unit, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(ui.lbl_unit, LV_PCT(100));
 
-    ui.lbl_stock = lv_label_create(cont);
+    ui.lbl_stock = lv_label_create(ui.cont_main);
     lv_label_set_long_mode(ui.lbl_stock, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(ui.lbl_stock, LV_PCT(100));
 
     ui.wifi_connected = false;
     ui.mqtt_connected = false;
     ui.ip_suffix = -1;
-    ui.first_scan_done = false;
 
     ui_render_status(ui);
 
@@ -125,39 +119,30 @@ static void ui_init(UiContext &ui)
 
 static void ui_show_error(UiContext &ui, const char *msg)
 {
-    if (!ui.first_scan_done) {
-        ui.first_scan_done = true;
-        lv_obj_add_flag(ui.cont_status, LV_OBJ_FLAG_HIDDEN);
-    }
-    ui_set_text(ui.lbl_name, "Chyba", 0xFF0000, &lv_font_montserrat_30);
-    ui_set_text(ui.lbl_price, msg, 0xFF0000, &lv_font_montserrat_30);
-    ui_set_text(ui.lbl_unit, "", 0x000000, &lv_font_montserrat_30);
-    ui_set_text(ui.lbl_stock, "", 0x000000, &lv_font_montserrat_30);
+    ui_set_text(ui.lbl_name, "Chyba", 0xFF0000, &lv_font_montserrat_28);
+    ui_set_text(ui.lbl_price, msg, 0xFF0000, &lv_font_montserrat_28);
+    ui_set_text(ui.lbl_unit, "", 0x000000, &lv_font_montserrat_28);
+    ui_set_text(ui.lbl_stock, "", 0x000000, &lv_font_montserrat_28);
 }
 
 static void ui_show_product(UiContext &ui, const ProductData &p)
 {
-    if (!ui.first_scan_done) {
-        ui.first_scan_done = true;
-        lv_obj_add_flag(ui.cont_status, LV_OBJ_FLAG_HIDDEN);
-    }
-
     char buf[128];
 
-    ui_set_text(ui.lbl_name, p.name, 0xFFFFFF, &lv_font_montserrat_22);
+    ui_set_text(ui.lbl_name, p.name, 0xFFFFFF, &lv_font_montserrat_24);
 
-    snprintf(buf, sizeof(buf), "Cena: %.2f kc", static_cast<double>(p.price));
-    ui_set_text(ui.lbl_price, buf, 0x00FF00, &lv_font_montserrat_40);
+    snprintf(buf, sizeof(buf), "Cena: %.2f Kc", static_cast<double>(p.price));
+    ui_set_text(ui.lbl_price, buf, 0x00FF00, &lv_font_montserrat_38);
 
     if (p.unitOfMeasure[0] != '\0' && p.unitCoef > 0.0f) {
-        snprintf(buf, sizeof(buf), "Cena za %s: %.2f kc",
+        snprintf(buf, sizeof(buf), "Cena za %s: %.2f Kc",
                  p.unitOfMeasure, static_cast<double>(p.price * p.unitCoef));
-        ui_set_text(ui.lbl_unit, buf, 0xFFFFFF, &lv_font_montserrat_22);
+        ui_set_text(ui.lbl_unit, buf, 0xFFFFFF, &lv_font_montserrat_18);
     } else {
-        ui_set_text(ui.lbl_unit, "", 0xFFFFFF, &lv_font_montserrat_22);
+        ui_set_text(ui.lbl_unit, "", 0xFFFFFF, &lv_font_montserrat_18);
     }
     snprintf(buf, sizeof(buf), "Skladem: %u ks", static_cast<unsigned>(p.stock));
-    ui_set_text(ui.lbl_stock, buf, 0xFFFFFF, &lv_font_montserrat_22);
+    ui_set_text(ui.lbl_stock, buf, 0xFFFFFF, &lv_font_montserrat_18);
 }
 
 static void ui_handle_message(UiContext &ui, const PrintMessage &msg)

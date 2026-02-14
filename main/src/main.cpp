@@ -127,7 +127,7 @@ extern "C" [[noreturn]] void app_main(void)
     init_system();
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 
-    static QueueHandle_t printQueue = xQueueCreate(1, sizeof(PrintMessage));
+    static QueueHandle_t printQueue = xQueueCreate(8, sizeof(PrintMessage));
     static QueueHandle_t controlQueue = xQueueCreate(3, sizeof(ControlMessage));
     static EventGroupHandle_t eventGroup = xEventGroupCreate();
 
