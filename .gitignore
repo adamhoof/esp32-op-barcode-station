@@ -1,4 +1,4 @@
-main/certs
+components/network/certs
 sdkconfig
 sdkconfig.old
 dependencies.lock

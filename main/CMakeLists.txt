@@ -1,7 +1,6 @@
-file(GLOB_RECURSE SOURCES "src/*.cpp")
-
 idf_component_register(
-        SRCS ${SOURCES}
-        INCLUDE_DIRS "include"
-        EMBED_TXTFILES "certs/ca.crt" "certs/client.crt" "certs/client.key"
+    SRCS "src/main.cpp"
+         "src/control_mode_store.cpp"
+    INCLUDE_DIRS "include"
+    PRIV_REQUIRES nvs_flash esp_netif esp_event station_common barcode display network
 )
