@@ -1,0 +1,32 @@
+menu "Display (SPI/ILI9341)"
+    config TFT_MISO
+        int "MISO Pin"
+        default 19
+
+    config TFT_MOSI
+        int "MOSI Pin"
+        default 23
+
+    config TFT_SCLK
+        int "SCLK Pin"
+        default 18
+
+    config TFT_CS
+        int "CS Pin"
+        default 32
+
+    config TFT_DC
+        int "DC Pin"
+        default 26
+
+    config TFT_RST
+        int "RST Pin"
+        default 25
+
+    config LED_PIN
+        int "LED Pin"
+        default 27
+        help
+            When LED pin on the display is perma VCC connected, set to -1.
+            Otherwise, setting the pin allows dimming.
+endmenu
