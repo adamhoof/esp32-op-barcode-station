@@ -4,6 +4,7 @@
 #include <atomic>
 #include "sdkconfig.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "mqtt_client.h"
 #include "esp_event.h"
 #include "print_message.h"
@@ -26,13 +27,17 @@ static const char *TAG = "mqtt_service";
 constexpr size_t MAC_HEX_LEN = 12;
 constexpr size_t TOPIC_BASE_LEN = sizeof(CONFIG_MQTT_REQ_TOPIC_PREFIX) + MAC_HEX_LEN + 2;
 constexpr size_t TOPIC_BUFFER_SIZE = (TOPIC_BASE_LEN + CONFIG_MAX_BARCODE_BUFFER_SIZE) * 2;
+constexpr uint64_t MQTT_INIT_TIMEOUT_US = 5ULL * 1000ULL * 1000ULL;
 
 static struct {
     esp_mqtt_client_handle_t client{};
     QueueHandle_t print_queue{};
     QueueHandle_t control_queue{};
     esp_event_handler_instance_t barcode_handler{};
+    esp_timer_handle_t init_timer{};
     std::atomic<bool> unreachable_notified;
+    std::atomic<bool> control_state_received;
+    std::atomic<bool> init_timeout_notified;
     char topic_base[TOPIC_BASE_LEN]{};
     char client_id[13]{};
 } s_ctx;
@@ -64,6 +69,35 @@ static void publish_control(ControlType type, const char* payload = nullptr, siz
     }
 
     xQueueSend(s_ctx.control_queue, &msg, 0);
+}
+
+static void stop_init_timer() {
+    if (s_ctx.init_timer != nullptr) {
+        const esp_err_t err = esp_timer_stop(s_ctx.init_timer);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "Failed to stop init timer: %s", esp_err_to_name(err));
+        }
+    }
+}
+
+static void mqtt_init_timeout_cb(void*) {
+    if (!s_ctx.control_state_received.load(std::memory_order_acquire) &&
+        !s_ctx.init_timeout_notified.exchange(true, std::memory_order_acq_rel)) {
+        ESP_LOGW(TAG, "No retained wake/sleep received within init timeout, applying persisted fallback");
+        publish_control(ControlType::MQTT_INIT_TIMEOUT);
+    }
+}
+
+static void start_init_timer() {
+    if (s_ctx.init_timer == nullptr) {
+        return;
+    }
+
+    stop_init_timer();
+    const esp_err_t err = esp_timer_start_once(s_ctx.init_timer, MQTT_INIT_TIMEOUT_US);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to start init timer: %s", esp_err_to_name(err));
+    }
 }
 
 static void handle_product_json(const char* payload, size_t len) {
@@ -98,16 +132,20 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
         case MQTT_EVENT_CONNECTED:
             ESP_LOGD(TAG, "MQTT_EVENT_CONNECTED");
             s_ctx.unreachable_notified = false;
+            s_ctx.control_state_received = false;
+            s_ctx.init_timeout_notified = false;
             queue_mqtt_status(true);
 
             esp_mqtt_client_subscribe_single(event->client, s_ctx.topic_base, 1);
             esp_mqtt_client_subscribe_single(event->client, CONFIG_MQTT_TOPIC_CONTROL, 1);
+            start_init_timer();
 
             ESP_LOGD(TAG, "Subscribed to topics: '%s', '%s'", s_ctx.topic_base, CONFIG_MQTT_TOPIC_CONTROL);
             break;
 
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "MQTT_EVENT_DISCONNECTED");
+            stop_init_timer();
             queue_mqtt_status(false);
             break;
 
@@ -120,9 +158,13 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
                      memcmp(event->topic, CONFIG_MQTT_TOPIC_CONTROL, event->topic_len) == 0) {
 
                 if (event->data_len == 4 && memcmp(event->data, "wake", 4) == 0) {
+                    s_ctx.control_state_received = true;
+                    stop_init_timer();
                     publish_control(ControlType::WAKE);
                 }
                 else if (event->data_len == 5 && memcmp(event->data, "sleep", 5) == 0) {
+                    s_ctx.control_state_received = true;
+                    stop_init_timer();
                     publish_control(ControlType::SLEEP);
                 }
                 else if (event->data_len == 12 && memcmp(event->data, "conf_scanner", 12) == 0) {
@@ -183,6 +225,8 @@ void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
     s_ctx.print_queue = printQueue;
     s_ctx.control_queue = controlQueue;
     s_ctx.unreachable_notified = false;
+    s_ctx.control_state_received = false;
+    s_ctx.init_timeout_notified = false;
 
     uint8_t mac[6]{};
     ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA));
@@ -212,6 +256,14 @@ void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
     cfg.network.timeout_ms = 10000;
     cfg.network.disable_auto_reconnect = false;
 
+    if (s_ctx.init_timer == nullptr) {
+        esp_timer_create_args_t timer_args{};
+        timer_args.callback = &mqtt_init_timeout_cb;
+        timer_args.arg = nullptr;
+        timer_args.name = "mqtt_init_to";
+        ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_ctx.init_timer));
+    }
+
     s_ctx.client = esp_mqtt_client_init(&cfg);
 
     ESP_ERROR_CHECK(esp_mqtt_client_register_event(s_ctx.client, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, &mqtt_event_handler, nullptr));
@@ -221,6 +273,8 @@ void mqtt_service_init(QueueHandle_t printQueue, QueueHandle_t controlQueue) {
 }
 
 void mqtt_service_stop() {
+    stop_init_timer();
+
     if (s_ctx.barcode_handler != nullptr) {
         ESP_ERROR_CHECK(esp_event_handler_instance_unregister(APP_EVENT, APP_EVENT_BARCODE_SCANNED, s_ctx.barcode_handler));
         s_ctx.barcode_handler = nullptr;
@@ -230,5 +284,10 @@ void mqtt_service_stop() {
         esp_mqtt_client_stop(s_ctx.client);
         esp_mqtt_client_destroy(s_ctx.client);
         s_ctx.client = nullptr;
+    }
+
+    if (s_ctx.init_timer != nullptr) {
+        ESP_ERROR_CHECK(esp_timer_delete(s_ctx.init_timer));
+        s_ctx.init_timer = nullptr;
     }
 }

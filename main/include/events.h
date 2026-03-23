@@ -28,6 +28,7 @@ enum class ControlType {
     FIRMWARE,
     SCANNER_CONF,
     MQTT_UNREACHABLE,
+    MQTT_INIT_TIMEOUT,
     WIFI_CONNECTED,
 };
 

@@ -31,6 +31,7 @@ static const char* control_type_to_string(const ControlType type)
         case ControlType::FIRMWARE: return "FIRMWARE";
         case ControlType::SCANNER_CONF: return "SCANNER_CONF";
         case ControlType::MQTT_UNREACHABLE: return "MQTT_UNREACHABLE";
+        case ControlType::MQTT_INIT_TIMEOUT: return "MQTT_INIT_TIMEOUT";
         case ControlType::WIFI_CONNECTED: return "WIFI_CONNECTED";
         default: return "UNKNOWN";
     }
@@ -233,6 +234,31 @@ extern "C" [[noreturn]] void app_main(void)
 
                     if (xQueueSend(controlQueue, &fallback_msg, 0) != pdTRUE) {
                         ESP_LOGW(TAG, "Failed to enqueue unreachable fallback control message");
+                    }
+                    break;
+                }
+
+                case ControlType::MQTT_INIT_TIMEOUT: {
+                    PersistedControlMode persisted_mode = PERSISTED_MODE_WAKE;
+                    const esp_err_t err = control_mode_store_get(&persisted_mode);
+                    if (err == ESP_ERR_NVS_NOT_FOUND) {
+                        ESP_LOGW(TAG, "No persisted mode found, defaulting to WAKE");
+                    } else if (err != ESP_OK) {
+                        ESP_LOGW(TAG, "Failed to read persisted mode (%s), defaulting to WAKE", esp_err_to_name(err));
+                        send_nvs_error(printQueue, "read mode", err);
+                    }
+
+                    ControlMessage fallback_msg{};
+                    fallback_msg.type = (persisted_mode == PERSISTED_MODE_SLEEP)
+                        ? ControlType::SLEEP
+                        : ControlType::WAKE;
+                    fallback_msg.payload[0] = '\0';
+
+                    ESP_LOGD(TAG, "Init-timeout fallback: %s",
+                             (fallback_msg.type == ControlType::SLEEP) ? "SLEEP" : "WAKE");
+
+                    if (xQueueSend(controlQueue, &fallback_msg, 0) != pdTRUE) {
+                        ESP_LOGW(TAG, "Failed to enqueue init-timeout fallback control message");
                     }
                     break;
                 }
