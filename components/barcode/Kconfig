@@ -1,0 +1,27 @@
+menu "Barcode Scanner (UART)"
+    config BARCODE_TX_PIN
+        int "TX Pin"
+        default 15
+        help
+            GPIO connected to Scanner's RX.
+
+    config BARCODE_RX_PIN
+        int "RX Pin"
+        default 13
+        help
+            GPIO connected to Scanner's TX.
+
+    config BARCODE_BAUD_RATE
+        int "Baud Rate"
+        default 9600
+
+    config BARCODE_DELIMITER
+        int "Delimiter (ASCII)"
+        default 13
+        help
+            ASCII value of the delimiter character. 13 is CR.
+
+    config MAX_BARCODE_BUFFER_SIZE
+        int "Max Barcode Length"
+        default 30
+endmenu
