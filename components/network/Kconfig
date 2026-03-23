@@ -1,0 +1,27 @@
+menu "WiFi Configuration"
+    config WIFI_SSID
+        string "WiFi SSID"
+        default ""
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+endmenu
+
+menu "MQTT Configuration"
+    config MQTT_BROKER_URI
+        string "MQTT broker URI"
+        default "mqtts://192.168.1.19:8883"
+        help
+            URI of the MQTT broker (scheme://host:port). Use mqtts:// for SSL.
+
+    config MQTT_REQ_TOPIC_PREFIX
+        string "Request Topic Prefix"
+        default "product"
+        help
+            This prefix is preppended to device MAC and requested BARCODE
+
+    config MQTT_TOPIC_CONTROL
+        string "Status Control Topic"
+        default "station/control"
+endmenu
